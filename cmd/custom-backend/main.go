@@ -118,8 +118,10 @@ func main() {
 			worker.NewThumbnailHandler(db, minioCli, contentWorkersEnabled),
 		}
 		if contentWorkersEnabled {
+			transcriptionHandler := worker.NewTranscriptionHandler(db, tongyiCli, cfg.Tongyi.InternalFrontendBaseURL)
+			transcriptionHandler.MinIO = minioCli
 			handlers = append(handlers,
-				worker.NewTranscriptionHandler(db, tongyiCli),
+				transcriptionHandler,
 				worker.NewSubtitleGenerateHandler(db, minioCli, tongyiCli),
 				worker.NewIndexHandler(db, weknoraCli, orchestrator),
 				&worker.GraphHandler{BaseSkillHandler: base},

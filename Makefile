@@ -126,7 +126,7 @@ docker-build-app:
 	@echo "获取版本信息..."
 	@eval $$(./scripts/get_version.sh env); \
 	./scripts/get_version.sh info; \
-	docker build --platform $(PLATFORM) \
+		docker build --network=host --platform $(PLATFORM) \
 		--build-arg VERSION_ARG="$$VERSION" \
 		--build-arg COMMIT_ID_ARG="$$COMMIT_ID" \
 		--build-arg BUILD_TIME_ARG="$$BUILD_TIME" \
@@ -395,4 +395,4 @@ custom-test:
 	go test ./internal/custom/...
 
 custom-image:
-	docker build -f docker/Dockerfile.custom-backend -t weknora/custom-backend:dev .
+	docker build --network=host -f docker/Dockerfile.custom-backend -t weknora/custom-backend:dev .

@@ -34,7 +34,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.custom-backend
-    image: weknora/custom-backend:acceptance
+    image: ${LOCAL_ACCEPTANCE_BACKEND_IMAGE:-weknora/custom-backend:acceptance}
     container_name: vidsage-custom-backend
     depends_on:
       custom-db-init:
@@ -93,6 +93,10 @@ services:
       CUSTOM_LLM_PROMPT_VERSION: ${CUSTOM_LLM_PROMPT_VERSION:-direct-content-v1}
       CUSTOM_LLM_TIMEOUT_SECONDS: ${CUSTOM_LLM_TIMEOUT_SECONDS:-180}
       CUSTOM_LLM_MAX_TOKENS: ${CUSTOM_LLM_MAX_TOKENS:-8192}
+      CUSTOM_TRAINING_OWNER_SCOPE_ID: ${CUSTOM_TRAINING_OWNER_SCOPE_ID:-single-account-local}
+      CUSTOM_TRAINING_PROMPT_VERSION: ${CUSTOM_TRAINING_PROMPT_VERSION:-training-orchestration-v2}
+      CUSTOM_TRAINING_MAX_INPUT_TOKENS: ${CUSTOM_TRAINING_MAX_INPUT_TOKENS:-0}
+      CUSTOM_TRAINING_TIMEOUT_SECONDS: ${CUSTOM_TRAINING_TIMEOUT_SECONDS:-600}
       CUSTOM_WORKER_POLL_INTERVAL: ${CUSTOM_WORKER_POLL_INTERVAL:-1}
       CUSTOM_WORKER_MAX_ATTEMPTS: ${CUSTOM_WORKER_MAX_ATTEMPTS:-3}
       CUSTOM_WORKER_CONCURRENCY: ${CUSTOM_WORKER_CONCURRENCY:-2}

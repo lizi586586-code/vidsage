@@ -108,7 +108,16 @@ services:
     networks:
       - acceptance-network
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8090/healthz"]
+      test:
+        - CMD-SHELL
+        - >-
+          if [ "$$CUSTOM_TRANSCRIPTION_PROVIDER" = "tencent_mps" ]; then
+            test -n "$$TENCENTCLOUD_SECRET_ID" &&
+            test -n "$$TENCENTCLOUD_SECRET_KEY" &&
+            test -n "$$TENCENTCLOUD_MPS_INPUT_BUCKET" &&
+            test -n "$$TENCENTCLOUD_MPS_OUTPUT_BUCKET";
+          fi &&
+          wget -qO- http://127.0.0.1:8090/healthz
       interval: 10s
       timeout: 5s
       retries: 6

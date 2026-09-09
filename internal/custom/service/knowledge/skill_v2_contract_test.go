@@ -11,13 +11,14 @@ import (
 	"testing"
 )
 
-const canonicalKnowledgeV2SkillSHA256 = "664124c4005b1a40653ff98222ade96a49427abc36235f27cf1725b1900fb81f"
+const canonicalKnowledgeV2SkillSHA256 = "c760086e070cdcdd4698220e5735b7c72d5d2fbc115e3c7274de1a8c17a565d0"
 
 var knowledgeV2SkillFiles = []string{
 	"SKILL.md",
 	"agents/openai.yaml",
 	"references/audit-rules.md",
 	"references/output-examples.md",
+	"references/relation-contract.json",
 	"references/type-frameworks.md",
 	"references/wiki-schema.md",
 }
@@ -32,6 +33,9 @@ func TestKnowledgeV2RuntimeSkillDigestAndContract(t *testing.T) {
 		"服务端负责确定规范对象和规范 Wiki 页面",
 		"Skill 只提出规范标题和别名建议",
 		"一组当前视频当前代次的 `evidence_contribution`",
+		"`evidence_sentence_ids` 是对象证据 ID 的唯一来源",
+		"把 YAML 放入最终回答不算提交",
+		"继续处理其他候选",
 	)
 	assertSkillContains(t, runtimeDir, "agents/openai.yaml",
 		"完整读取 SKILL.md",
@@ -46,9 +50,15 @@ func TestKnowledgeV2RuntimeSkillDigestAndContract(t *testing.T) {
 	assertSkillContains(t, runtimeDir, "references/wiki-schema.md",
 		"一对象一规范页",
 		"evidence_contribution",
+		"最终回答中的 Markdown 或 YAML 不会触发写入",
 		"created",
 		"reused",
 		"review_required",
+		"[relation-contract.json](relation-contract.json)",
+	)
+	assertSkillContains(t, runtimeDir, "references/relation-contract.json",
+		`"part_of"`, `"explains"`, `"example_of"`, `"applies_to"`,
+		`"supports"`, `"contradicts"`, `"complements"`, `"involves"`,
 	)
 	assertSkillContains(t, runtimeDir, "references/audit-rules.md",
 		"生产任务、V2 Skill、`wiki_write_page` 工具调用和源文档",
@@ -82,6 +92,27 @@ func TestKnowledgeV2RuntimeCopyMatchesSource(t *testing.T) {
 		if !bytes.Equal(source, runtime) {
 			t.Fatalf("runtime file %s is not generated from the V2 source", relativePath)
 		}
+	}
+}
+
+func TestKnowledgeV2RuntimeRelationContractMatchesEmbeddedRuntime(t *testing.T) {
+	runtimeDir := findSkillDir(t, filepath.Join("skills", "preloaded", "extract-video-knowledge"))
+	runtimeContract := readSkillFile(t, runtimeDir, "references/relation-contract.json")
+	if !bytes.Equal(runtimeContract, relationContractJSON) {
+		t.Fatal("embedded relation contract is not generated from the V2 runtime Skill")
+	}
+	if got := FormalRelationTypes(); strings.Join(got, ",") != "applies_to,complements,contradicts,example_of,explains,involves,part_of,supports" {
+		t.Fatalf("formal relation types = %v", got)
+	}
+}
+
+func TestLegacyDerivedFromOnlyMapsFromCaseToInsight(t *testing.T) {
+	mapped, ok := NormalizeFormalRelationType("derived_from", TypeCase, TypeInsight)
+	if !ok || mapped != "supports" {
+		t.Fatalf("case derived_from insight = %q, %v; want supports, true", mapped, ok)
+	}
+	if mapped, ok := NormalizeFormalRelationType("derived_from", TypeConcept, TypeInsight); ok || mapped != "derived_from" {
+		t.Fatalf("concept derived_from insight = %q, %v; want derived_from, false", mapped, ok)
 	}
 }
 

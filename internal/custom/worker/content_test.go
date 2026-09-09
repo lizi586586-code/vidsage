@@ -65,8 +65,10 @@ type countingAgentClient struct {
 }
 
 type graphProjectionStub struct {
-	video *model.Video
-	page  *weknora.WikiPage
+	video               *model.Video
+	page                *weknora.WikiPage
+	knowledgeBaseBuilds int
+	err                 error
 }
 
 func TestWrapWikiArtifactWaitErrorPreservesContentContractFailure(t *testing.T) {
@@ -87,7 +89,10 @@ func (s *graphProjectionStub) ProjectVideo(_ context.Context, video *model.Video
 	return nil
 }
 
-func (s *graphProjectionStub) ProjectKnowledgeBase(context.Context) error { return nil }
+func (s *graphProjectionStub) ProjectKnowledgeBase(context.Context) error {
+	s.knowledgeBaseBuilds++
+	return s.err
+}
 
 func (s *graphProjectionStub) Query(context.Context, knowledgegraph.Query) (*knowledgegraph.Graph, error) {
 	return &knowledgegraph.Graph{}, nil
@@ -187,6 +192,10 @@ func TestSkillQueryUsesTranscriptKnowledgeIDAsSourceDocument(t *testing.T) {
 	require.Contains(t, query, "audit_status: aligned")
 	require.Contains(t, query, "索引只引用工具已返回并回读的规范页面")
 	require.Contains(t, query, "连续语义窗口")
+	require.Contains(t, query, "最终报告不能代替 wiki_write_page 工具调用")
+	require.Contains(t, query, "evidence_sentence_ids")
+	require.Contains(t, query, "继续处理其他候选")
+	require.Contains(t, query, "至少一次成功写入并回读")
 	require.Contains(t, query, "不得使用示例、占位内容或 mock 数据")
 	require.NotContains(t, query, "每个实体和每个知识原子都要写入独立 Wiki 页面")
 	require.NotContains(t, query, "methodology: input、steps、criteria、output、applicability")
@@ -237,12 +246,17 @@ func TestTranscriptKnowledgeIDsUsesEveryCurrentChunk(t *testing.T) {
 	require.Equal(t, []string{"knowledge-1", "knowledge-2"}, ids)
 }
 
-func TestWikiInputFullDocumentDoesNotReadTranscriptChunks(t *testing.T) {
+func TestWikiInputFullDocumentValidatesTranscriptChunks(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Video{}, &model.VideoTranscriptChunk{}, &model.VideoTranscriptSource{}))
 	video := model.Video{ID: "video-1", Title: "测试视频", DurationSeconds: 20, TranscriptGeneration: "generation-1"}
 	require.NoError(t, db.Create(&video).Error)
+	require.NoError(t, db.Create(&model.VideoTranscriptChunk{
+		VideoID: video.ID, Generation: video.TranscriptGeneration, ChunkIndex: 0,
+		EvidenceSentenceID: "e-1", SourceSegmentID: "s-1", SpeakerID: "0", StartMs: 100, EndMs: 1000,
+		KnowledgeID: "chunk-1", ContentHash: "chunk-hash", Status: "completed",
+	}).Error)
 	require.NoError(t, db.Create(&model.VideoTranscriptSource{ID: "binding-1", VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration, KnowledgeBaseID: "knowledge-kb", KnowledgeID: "source-1", ContentHash: "hash", Status: transcriptservice.SourceStatusCreated}).Error)
 	doc, err := transcriptservice.Build(transcriptservice.Input{
 		VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration, Title: video.Title, DurationSeconds: video.DurationSeconds,
@@ -257,6 +271,50 @@ func TestWikiInputFullDocumentDoesNotReadTranscriptChunks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, TranscriptInputModeFullDocument, input.Mode)
 	require.Equal(t, []string{"source-1"}, input.KnowledgeIDs)
+}
+
+func TestGraphRunRejectsSourceEvidenceMismatchBeforeAgent(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Video{}, &model.VideoTranscriptChunk{}, &model.VideoTranscriptSource{}))
+	video := model.Video{ID: "video-1", Title: "测试视频", DurationSeconds: 20, TranscriptGeneration: "generation-1"}
+	require.NoError(t, db.Create(&video).Error)
+	require.NoError(t, db.Create(&model.VideoTranscriptChunk{
+		VideoID: video.ID, Generation: video.TranscriptGeneration, ChunkIndex: 0,
+		EvidenceSentenceID: "evs:v1:active", SourceSegmentID: "s-1", SpeakerID: "0", StartMs: 100, EndMs: 1000,
+		KnowledgeID: "chunk-1", ContentHash: "chunk-hash", Status: "completed",
+	}).Error)
+	require.NoError(t, db.Create(&model.VideoTranscriptSource{
+		ID: "binding-1", VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration,
+		KnowledgeBaseID: "knowledge-kb", KnowledgeID: "source-1", ContentHash: "source-hash", Status: transcriptservice.SourceStatusCreated,
+	}).Error)
+	doc, err := transcriptservice.Build(transcriptservice.Input{
+		VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration, Title: video.Title, DurationSeconds: video.DurationSeconds,
+		Chapters: []transcriptservice.InputChapter{{Index: 0, Title: "开场", Paragraphs: []transcriptservice.InputParagraph{{Index: 0, Sentences: []transcriptservice.InputSentence{{
+			SourceSentenceID: "s-1", EvidenceSentenceID: "evs:v1:stale", Text: "正文", StartMs: 100, EndMs: 1000,
+		}}}}}},
+	})
+	require.NoError(t, err)
+	jsonText, err := doc.JSON()
+	require.NoError(t, err)
+	agent := &countingAgentClient{}
+	handler := BaseSkillHandler{
+		DB: db, AgentClient: agent, KnowledgeBaseID: "knowledge-kb",
+		SourceReader: sourceReaderStub{value: weknora.ManualKnowledgeResult{
+			ID: "source-1", KnowledgeBaseID: "knowledge-kb", Content: transcriptservice.SourceContent(doc, jsonText, "source-hash"),
+		}},
+	}
+	job := &model.VideoProcessingJob{
+		ID: "job-1", VideoID: video.ID, JobType: skill.JobGraph, TranscriptGeneration: video.TranscriptGeneration,
+		InputPayload: `{"transcript_input_mode":"full_document","transcript_source_knowledge_id":"source-1"}`,
+	}
+
+	err = handler.run(t.Context(), job, &video, skill.JobGraph)
+	require.ErrorContains(t, err, transcriptservice.SourceValidationEvidence)
+	category, code := ClassifyProcessingError(err)
+	require.Equal(t, ErrorCategoryResponseParse, category)
+	require.Equal(t, transcriptservice.SourceValidationEvidence, code)
+	require.Zero(t, agent.calls)
 }
 
 func TestWikiInputFullDocumentRejectsMissingSource(t *testing.T) {
@@ -338,6 +396,14 @@ func graphSourceReader(t *testing.T, video *model.Video) sourceReaderStub {
 		ID: "source-1", KnowledgeBaseID: "knowledge-kb",
 		Content: transcriptservice.SourceContent(doc, jsonText, "hash"),
 	}}
+}
+
+func graphTranscriptChunk(video *model.Video) *model.VideoTranscriptChunk {
+	return &model.VideoTranscriptChunk{
+		VideoID: video.ID, Generation: video.TranscriptGeneration, ChunkIndex: 0,
+		KnowledgeID: "chunk-1", EvidenceSentenceID: "e-1", SourceSegmentID: "s-1",
+		SpeakerID: "0", StartMs: 100, EndMs: 1000, ContentHash: "hash", Status: "completed",
+	}
 }
 
 func p3IndexContent(videoID, generation, title string) string {
@@ -430,7 +496,7 @@ func TestGraphHandlerRejectsUncontractedNativeWiki(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&model.Video{}, &model.VideoTranscriptChunk{}, &model.VideoTranscriptSource{}, &model.VideoProcessingJob{}))
 	video := &model.Video{ID: "video-1", Title: "测试视频", DurationSeconds: 20, TranscriptGeneration: "generation-1", SummaryWikiPageID: "summary-1"}
 	require.NoError(t, db.Create(video).Error)
-	require.NoError(t, db.Create(&model.VideoTranscriptChunk{VideoID: video.ID, Generation: video.TranscriptGeneration, ChunkIndex: 0, KnowledgeID: "chunk-1", ContentHash: "hash", Status: "completed"}).Error)
+	require.NoError(t, db.Create(graphTranscriptChunk(video)).Error)
 	require.NoError(t, db.Create(&model.VideoTranscriptSource{ID: "binding-1", VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration, KnowledgeBaseID: "knowledge-kb", KnowledgeID: "source-1", ContentHash: "source-hash", Status: "created"}).Error)
 	job := &model.VideoProcessingJob{ID: "job-1", VideoID: video.ID, JobType: skill.JobGraph, TranscriptGeneration: video.TranscriptGeneration, InputPayload: `{"transcript_source_knowledge_id":"source-1"}`}
 	require.NoError(t, db.Create(job).Error)
@@ -445,7 +511,7 @@ func TestGraphHandlerRejectsUncontractedNativeWiki(t *testing.T) {
 	handler := GraphHandler{BaseSkillHandler: BaseSkillHandler{
 		DB: db, AgentClient: agent, SourceReader: graphSourceReader(t, video),
 		KnowledgeBaseID: "knowledge-kb", Orchestrator: orchestrator,
-	}}
+	}, Graph: &graphProjectionStub{}}
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	err = handler.Run(ctx, job, video)
@@ -490,10 +556,63 @@ func TestGraphHandlerReconcilesCompliantP3WithoutAgent(t *testing.T) {
 	require.NoError(t, db.First(&stored, "id = ?", video.ID).Error)
 	require.Equal(t, index.ID, stored.KnowledgeBaseWikiPageID)
 	require.Equal(t, "passed", stored.KnowledgeAuditStatus)
-	require.NotNil(t, projection.video)
-	require.Equal(t, video.ID, projection.video.ID)
-	require.NotNil(t, projection.page)
-	require.Equal(t, index.ID, projection.page.ID)
+	require.Equal(t, 1, projection.knowledgeBaseBuilds)
+	require.Nil(t, projection.video)
+	require.Nil(t, projection.page)
+}
+
+func TestGraphHandlerFailsWhenGraphProjectionIsUnavailable(t *testing.T) {
+	db := p3EvidenceDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Video{}, &model.VideoProcessingJob{}))
+	video := &model.Video{ID: "video-1", Title: "测试视频", TranscriptGeneration: "generation-1"}
+	require.NoError(t, db.Create(video).Error)
+	index := weknora.WikiPage{
+		ID: "index-1", Slug: "video/video-1", PageType: "index",
+		Content: p3IndexContent(video.ID, video.TranscriptGeneration, video.Title), Version: 1,
+	}
+	object := weknora.WikiPage{
+		ID: "object-1", Slug: "concept/object-1", PageType: "index",
+		Content: p3ConceptContent(video.ID, video.TranscriptGeneration), Version: 1,
+	}
+	server := p3WikiServer(t, []weknora.WikiPage{index, object})
+	defer server.Close()
+	wiki := weknora.NewWikiClient(config.WeKnoraConfig{BaseURL: server.URL})
+	handler := GraphHandler{BaseSkillHandler: BaseSkillHandler{
+		DB: db, AgentClient: &countingAgentClient{}, KnowledgeBaseID: "knowledge-kb",
+		Orchestrator: skill.NewOrchestrator(db, wiki, "knowledge-kb"),
+	}}
+
+	err := handler.Run(t.Context(), &model.VideoProcessingJob{ID: "job-1", VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration}, video)
+	require.ErrorContains(t, err, "graph_projection:unavailable")
+	category, code := ClassifyProcessingError(err)
+	require.Equal(t, ErrorCategoryConfigurationAuth, category)
+	require.Equal(t, "graph_projection_unavailable", code)
+	var stored model.Video
+	require.NoError(t, db.First(&stored, "id = ?", video.ID).Error)
+	require.Empty(t, stored.KnowledgeBaseWikiPageID)
+}
+
+func TestGraphHandlerDoesNotRecordCompletionBeforeProjectionSucceeds(t *testing.T) {
+	db := p3EvidenceDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Video{}, &model.VideoProcessingJob{}))
+	video := &model.Video{ID: "video-1", Title: "测试视频", TranscriptGeneration: "generation-1"}
+	require.NoError(t, db.Create(video).Error)
+	index := weknora.WikiPage{ID: "index-1", Slug: "video/video-1", PageType: "index", Content: p3IndexContent(video.ID, video.TranscriptGeneration, video.Title), Version: 1}
+	object := weknora.WikiPage{ID: "object-1", Slug: "concept/object-1", PageType: "index", Content: p3ConceptContent(video.ID, video.TranscriptGeneration), Version: 1}
+	server := p3WikiServer(t, []weknora.WikiPage{index, object})
+	defer server.Close()
+	wiki := weknora.NewWikiClient(config.WeKnoraConfig{BaseURL: server.URL})
+	handler := GraphHandler{
+		BaseSkillHandler: BaseSkillHandler{DB: db, KnowledgeBaseID: "knowledge-kb", Orchestrator: skill.NewOrchestrator(db, wiki, "knowledge-kb")},
+		Graph:            &graphProjectionStub{err: errors.New("neo4j unavailable")},
+	}
+
+	err := handler.Run(t.Context(), &model.VideoProcessingJob{ID: "job-1", VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration}, video)
+	require.ErrorContains(t, err, "neo4j unavailable")
+	var stored model.Video
+	require.NoError(t, db.First(&stored, "id = ?", video.ID).Error)
+	require.Empty(t, stored.KnowledgeBaseWikiPageID)
+	require.Empty(t, stored.KnowledgeAuditStatus)
 }
 
 func TestInspectP3KnowledgeRejectsMultiObjectBatchWithoutFormalRelations(t *testing.T) {
@@ -600,7 +719,7 @@ func TestGraphHandlerRepairsMixedInvalidP3InsteadOfMarkingItComplete(t *testing.
 	require.NoError(t, db.AutoMigrate(&model.Video{}, &model.VideoTranscriptChunk{}, &model.VideoTranscriptSource{}, &model.VideoProcessingJob{}))
 	video := &model.Video{ID: "video-1", Title: "测试视频", TranscriptGeneration: "generation-1"}
 	require.NoError(t, db.Create(video).Error)
-	require.NoError(t, db.Create(&model.VideoTranscriptChunk{VideoID: video.ID, Generation: video.TranscriptGeneration, ChunkIndex: 0, KnowledgeID: "chunk-1", EvidenceSentenceID: "e-1", ContentHash: "hash", Status: "completed"}).Error)
+	require.NoError(t, db.Create(graphTranscriptChunk(video)).Error)
 	require.NoError(t, db.Create(&model.VideoTranscriptSource{ID: "binding-1", VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration, KnowledgeBaseID: "knowledge-kb", KnowledgeID: "source-1", ContentHash: "source-hash", Status: "created"}).Error)
 	job := &model.VideoProcessingJob{ID: "job-1", VideoID: video.ID, JobType: skill.JobGraph, TranscriptGeneration: video.TranscriptGeneration, InputPayload: `{"transcript_source_knowledge_id":"source-1"}`}
 	require.NoError(t, db.Create(job).Error)
@@ -615,10 +734,11 @@ func TestGraphHandlerRepairsMixedInvalidP3InsteadOfMarkingItComplete(t *testing.
 	defer server.Close()
 	wiki := weknora.NewWikiClient(config.WeKnoraConfig{BaseURL: server.URL})
 	agent := &countingAgentClient{triggerErr: errors.New("stop after proving repair was requested")}
+	projection := &graphProjectionStub{}
 	handler := GraphHandler{BaseSkillHandler: BaseSkillHandler{
 		DB: db, AgentClient: agent, SourceReader: graphSourceReader(t, video),
 		KnowledgeBaseID: "knowledge-kb", Orchestrator: skill.NewOrchestrator(db, wiki, "knowledge-kb"),
-	}}
+	}, Graph: projection}
 
 	err = handler.Run(t.Context(), job, video)
 	require.ErrorContains(t, err, "stop after proving repair was requested")
@@ -626,6 +746,8 @@ func TestGraphHandlerRepairsMixedInvalidP3InsteadOfMarkingItComplete(t *testing.
 	var stored model.Video
 	require.NoError(t, db.First(&stored, "id = ?", video.ID).Error)
 	require.Empty(t, stored.KnowledgeBaseWikiPageID)
+	require.Nil(t, projection.video, "a failed graph task must not project a video")
+	require.Nil(t, projection.page, "a failed graph task must not project Wiki knowledge")
 }
 
 func TestWaitForP3KnowledgeReportsInvalidObjectWithoutTimeout(t *testing.T) {
@@ -651,7 +773,7 @@ func TestGraphHandlerRequestsOneContractRepairWithValidationDetails(t *testing.T
 	require.NoError(t, db.AutoMigrate(&model.Video{}, &model.VideoTranscriptChunk{}, &model.VideoTranscriptSource{}, &model.VideoProcessingJob{}))
 	video := &model.Video{ID: "video-1", Title: "测试视频", DurationSeconds: 20, TranscriptGeneration: "generation-1"}
 	require.NoError(t, db.Create(video).Error)
-	require.NoError(t, db.Create(&model.VideoTranscriptChunk{VideoID: video.ID, Generation: video.TranscriptGeneration, ChunkIndex: 0, KnowledgeID: "chunk-1", ContentHash: "hash", Status: "completed"}).Error)
+	require.NoError(t, db.Create(graphTranscriptChunk(video)).Error)
 	require.NoError(t, db.Create(&model.VideoTranscriptSource{ID: "binding-1", VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration, KnowledgeBaseID: "knowledge-kb", KnowledgeID: "source-1", ContentHash: "source-hash", Status: "created"}).Error)
 	job := &model.VideoProcessingJob{ID: "job-1", VideoID: video.ID, JobType: skill.JobGraph, TranscriptGeneration: video.TranscriptGeneration, InputPayload: `{"transcript_source_knowledge_id":"source-1"}`}
 	require.NoError(t, db.Create(job).Error)
@@ -665,7 +787,7 @@ func TestGraphHandlerRequestsOneContractRepairWithValidationDetails(t *testing.T
 	handler := GraphHandler{BaseSkillHandler: BaseSkillHandler{
 		DB: db, AgentClient: agent, SourceReader: graphSourceReader(t, video),
 		KnowledgeBaseID: "knowledge-kb", Orchestrator: skill.NewOrchestrator(db, wiki, "knowledge-kb"),
-	}}
+	}, Graph: &graphProjectionStub{}}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()

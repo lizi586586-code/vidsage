@@ -26,6 +26,9 @@ func ClassifyProcessingError(err error) (string, string) {
 		return ErrorCategoryTimeout, "timeout"
 	}
 	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "graph_projection:unavailable") {
+		return ErrorCategoryConfigurationAuth, "graph_projection_unavailable"
+	}
 	if containsAny(message, "p3 knowledge object validation failed", "knowledge object content contract", "knowledge object relation contract") {
 		return ErrorCategoryWikiArtifact, "content_contract_failed"
 	}

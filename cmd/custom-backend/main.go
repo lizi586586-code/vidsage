@@ -33,6 +33,8 @@ import (
 	"github.com/Tencent/WeKnora/internal/custom/model"
 	"github.com/Tencent/WeKnora/internal/custom/service/knowledgegraph"
 	"github.com/Tencent/WeKnora/internal/custom/service/skill"
+	"github.com/Tencent/WeKnora/internal/custom/service/trainingorchestration"
+	transcriptservice "github.com/Tencent/WeKnora/internal/custom/service/transcript"
 	"github.com/Tencent/WeKnora/internal/custom/worker"
 )
 
@@ -207,9 +209,26 @@ func main() {
 	}
 
 	// HTTP 服务
+	var trainingService *trainingorchestration.Service
+	if kbRoutingErr == nil && minioCli != nil && wikiClient != nil && evidenceWeKnoraCli != nil && knowledgeWeKnoraCli != nil {
+		collector := &trainingorchestration.Collector{
+			DB: db, Wiki: wikiClient, SourceReader: knowledgeWeKnoraCli,
+			TranscriptReader: transcriptservice.NewReader(db, evidenceWeKnoraCli),
+			VideoAccess:      trainingorchestration.NewVideoAccessReader(minioCli),
+			KnowledgeBaseID:  roles.Knowledge, OwnerScopeID: cfg.Training.OwnerScopeID,
+		}
+		trainingService = &trainingorchestration.Service{
+			DB: db, Collector: collector,
+			Generator: &trainingorchestration.Generator{LLM: llmCli, MaxInputTokens: cfg.Training.MaxInputTokens, PromptVersion: cfg.Training.PromptVersion},
+			Wiki:      wikiClient, KnowledgeBaseID: roles.Knowledge, OwnerScopeID: cfg.Training.OwnerScopeID,
+			Model: cfg.LLM.Model, PromptVersion: cfg.Training.PromptVersion,
+			RunTimeout: time.Duration(cfg.Training.TimeoutSeconds) * time.Second,
+		}
+	}
 	routerDeps := &handler.Deps{
 		DB: db, Cfg: cfg, MinIO: minioCli, Wiki: wikiClient,
 		EvidenceWeKnora: evidenceWeKnoraCli, KnowledgeWeKnora: knowledgeWeKnoraCli, Graph: wikiGraph,
+		TrainingOrchestration: trainingService,
 	}
 	router := handler.BuildRouterForDeps(routerDeps)
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -267,6 +286,8 @@ func autoMigrateLocalDB(db *gorm.DB) error {
 		&model.ChatSourceAudit{},
 		&model.WikiRelationAudit{},
 		&model.WikiIdentityAudit{},
+		&model.TrainingOrchestrationJob{},
+		&model.TrainingOrchestrationCurrent{},
 	)
 }
 

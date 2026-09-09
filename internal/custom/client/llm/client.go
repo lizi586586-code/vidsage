@@ -19,6 +19,16 @@ type Client struct {
 	http *http.Client
 }
 
+// CompleteWithSystem sends an explicit system instruction separately from the
+// user payload. Some reasoning models treat a concatenated user prompt as a
+// normal conversation and ignore its output contract.
+func (c *Client) CompleteWithSystem(ctx context.Context, systemPrompt, prompt string) (string, error) {
+	return c.complete(ctx, []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: prompt},
+	})
+}
+
 func (c *Client) Model() string { return c.cfg.Model }
 
 func (c *Client) PromptVersion() string { return c.cfg.PromptVersion }
@@ -62,6 +72,10 @@ func NewClient(cfg config.LLMConfig) *Client {
 }
 
 func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
+	return c.complete(ctx, []Message{{Role: "user", Content: prompt}})
+}
+
+func (c *Client) complete(ctx context.Context, messages []Message) (string, error) {
 	if strings.TrimSpace(c.cfg.BaseURL) == "" {
 		return "", fmt.Errorf("custom llm base url 未配置")
 	}
@@ -71,19 +85,21 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	if strings.TrimSpace(c.cfg.Model) == "" {
 		return "", fmt.Errorf("custom llm model 未配置")
 	}
-	if strings.TrimSpace(prompt) == "" {
-		return "", fmt.Errorf("llm prompt 不能为空")
+	if len(messages) == 0 {
+		return "", fmt.Errorf("llm messages 不能为空")
+	}
+	for _, message := range messages {
+		if strings.TrimSpace(message.Content) == "" {
+			return "", fmt.Errorf("llm message 不能为空")
+		}
 	}
 
 	body, err := json.Marshal(completionRequest{
 		Model:          c.cfg.Model,
 		Temperature:    0,
 		ResponseFormat: &responseFormat{Type: "json_object"},
-		Messages: []Message{{
-			Role:    "user",
-			Content: prompt,
-		}},
-		MaxTokens: c.cfg.MaxTokens,
+		Messages:       messages,
+		MaxTokens:      c.cfg.MaxTokens,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode llm request: %w", err)
@@ -161,14 +177,26 @@ func (c *Client) Stream(ctx context.Context, prompt string, onDelta func(string)
 	if !strings.HasSuffix(endpoint, "/chat/completions") {
 		endpoint += "/chat/completions"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	requestCtx := ctx
+	cancel := func() {}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline && c.http.Timeout > 0 {
+		requestCtx, cancel = context.WithTimeout(ctx, c.http.Timeout)
+	}
+	defer cancel()
+
+	// Streaming callers with a business deadline need that deadline to govern
+	// the whole response. http.Client.Timeout would otherwise terminate a
+	// healthy long-running stream even while response chunks are arriving.
+	streamHTTP := *c.http
+	streamHTTP.Timeout = 0
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
-	response, err := c.http.Do(req)
+	response, err := streamHTTP.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("call llm stream: %w", err)
 	}

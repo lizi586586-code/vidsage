@@ -23,6 +23,7 @@ type Config struct {
 	MPS                   MPSConfig
 	TranscriptionProvider string
 	LLM                   LLMConfig
+	Training              TrainingConfig
 	Worker                WorkerConfig
 }
 
@@ -178,6 +179,13 @@ type LLMConfig struct {
 	MaxTokens      int
 }
 
+type TrainingConfig struct {
+	OwnerScopeID   string
+	PromptVersion  string
+	MaxInputTokens int
+	TimeoutSeconds int
+}
+
 // WorkerConfig Worker 引擎配置（轮询周期 / 重试上限 / 处理池）
 type WorkerConfig struct {
 	PollIntervalSeconds    int  // 扫描周期（秒）
@@ -301,6 +309,12 @@ func Load() *Config {
 			PromptVersion:  getEnv("CUSTOM_LLM_PROMPT_VERSION", "direct-content-v3"),
 			TimeoutSeconds: getEnvInt("CUSTOM_LLM_TIMEOUT_SECONDS", 180),
 			MaxTokens:      getEnvInt("CUSTOM_LLM_MAX_TOKENS", 8192),
+		},
+		Training: TrainingConfig{
+			OwnerScopeID:   getEnv("CUSTOM_TRAINING_OWNER_SCOPE_ID", "single-account-local"),
+			PromptVersion:  getEnv("CUSTOM_TRAINING_PROMPT_VERSION", "training-orchestration-v2"),
+			MaxInputTokens: getEnvInt("CUSTOM_TRAINING_MAX_INPUT_TOKENS", 0),
+			TimeoutSeconds: getEnvInt("CUSTOM_TRAINING_TIMEOUT_SECONDS", 600),
 		},
 		Worker: WorkerConfig{
 			PollIntervalSeconds:    getEnvInt("CUSTOM_WORKER_POLL_INTERVAL", 1),

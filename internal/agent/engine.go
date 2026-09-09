@@ -409,6 +409,11 @@ loop:
 					totalTC)
 				_ = e.streamFinalAnswerToEventBus(ctx, query, state, sessionID)
 				state.IsComplete = true
+				state.CompletionStatus = "succeeded"
+				state.CompletionFailureReason = ""
+			} else {
+				state.CompletionStatus = "failed"
+				state.CompletionFailureReason = "context_cancelled"
 			}
 			return state, ctx.Err()
 		default:
@@ -581,6 +586,7 @@ func (e *AgentEngine) runReActIteration(
 				round, *consecutiveSameContent+1, response.FinishReason)
 			state.FinalAnswer = response.Content
 			state.IsComplete = true
+			state.CompletionStatus = "succeeded"
 			return iterOutcomeBreak, nil
 		}
 	} else {
@@ -638,11 +644,15 @@ func (e *AgentEngine) runReActIteration(
 				round, maxEmptyResponseRetries)
 			state.FinalAnswer = "I'm sorry, I was unable to generate a response. Please try again."
 			state.IsComplete = true
+			state.CompletionStatus = "failed"
+			state.CompletionFailureReason = "empty_response"
 			state.RoundSteps = append(state.RoundSteps, verdict.step)
 			return iterOutcomeBreak, nil
 		}
 		state.FinalAnswer = verdict.finalAnswer
 		state.IsComplete = true
+		state.CompletionStatus = "succeeded"
+		state.CompletionFailureReason = ""
 		state.RoundSteps = append(state.RoundSteps, verdict.step)
 		return iterOutcomeBreak, nil
 	}

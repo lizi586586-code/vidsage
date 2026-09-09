@@ -3,6 +3,7 @@ package trainingorchestration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,23 @@ func (f *fakeStreamingCompletionClient) Stream(_ context.Context, prompt string,
 	f.lastPrompt = prompt
 	return f.output, nil
 }
+
+type fakeJSONCompletionClient struct {
+	fakeStreamingCompletionClient
+	jsonCalls int
+	jsonErr   error
+}
+
+func (f *fakeJSONCompletionClient) CompleteJSON(_ context.Context, prompt string) (string, error) {
+	f.jsonCalls++
+	f.lastPrompt = prompt
+	return f.output, f.jsonErr
+}
+
+type temporaryCompletionError struct{}
+
+func (temporaryCompletionError) Error() string   { return "temporary provider failure" }
+func (temporaryCompletionError) Temporary() bool { return true }
 
 func TestGeneratorPublishesOnlyWhitelistedModelReferences(t *testing.T) {
 	collector, _, _ := testCollector(t, true)
@@ -78,6 +96,24 @@ func TestGeneratorUsesStreamingCompletionWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestGeneratorPrefersCompleteJSONWhenAvailable(t *testing.T) {
+	collector, _, _ := testCollector(t, true)
+	input, err := collector.Collect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelOutput := validModelOutput(input)
+	raw, _ := json.Marshal(modelOutput)
+	llm := &fakeJSONCompletionClient{fakeStreamingCompletionClient: fakeStreamingCompletionClient{fakeCompletionClient: fakeCompletionClient{output: string(raw)}}}
+
+	if _, err := (&Generator{LLM: llm}).Generate(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	if llm.jsonCalls != 1 || llm.streamCalls != 0 || llm.calls != 0 {
+		t.Fatalf("json calls=%d stream calls=%d complete calls=%d", llm.jsonCalls, llm.streamCalls, llm.calls)
+	}
+}
+
 func TestGeneratorStripsMiniMaxReasoningPrefix(t *testing.T) {
 	collector, _, _ := testCollector(t, true)
 	input, err := collector.Collect(t.Context())
@@ -90,6 +126,68 @@ func TestGeneratorStripsMiniMaxReasoningPrefix(t *testing.T) {
 
 	if _, err := (&Generator{LLM: llm}).Generate(t.Context(), input); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGeneratorStripsMiniMaxFinalWrapper(t *testing.T) {
+	collector, _, _ := testCollector(t, true)
+	input, err := collector.Collect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelOutput := validModelOutput(input)
+	raw, _ := json.Marshal(modelOutput)
+	llm := &fakeCompletionClient{output: "<think>先分析输入。</think>\n<final>\n```json\n" + string(raw) + "\n```\n</final>"}
+
+	if _, err := (&Generator{LLM: llm}).Generate(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGeneratorRejectsUnrecognizedMarkupWrapper(t *testing.T) {
+	collector, _, _ := testCollector(t, true)
+	input, err := collector.Collect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelOutput := validModelOutput(input)
+	raw, _ := json.Marshal(modelOutput)
+	llm := &fakeCompletionClient{output: "<html>" + string(raw) + "</html>"}
+
+	_, err = (&Generator{LLM: llm}).Generate(t.Context(), input)
+	var failure *GenerationError
+	if !errors.As(err, &failure) || failure.Code != "model_output_invalid" || !strings.Contains(err.Error(), "invalid character '<'") {
+		t.Fatalf("expected unrecognized markup rejection, got %v", err)
+	}
+}
+
+func TestGeneratorClassifiesUnclosedReasoningAsTruncated(t *testing.T) {
+	collector, _, _ := testCollector(t, true)
+	input, err := collector.Collect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := &fakeCompletionClient{output: "<think>reasoning exceeded the output budget"}
+
+	_, err = (&Generator{LLM: llm}).Generate(t.Context(), input)
+	var failure *GenerationError
+	if !errors.As(err, &failure) || failure.Code != "model_output_truncated" {
+		t.Fatalf("expected truncated model output, got %v", err)
+	}
+}
+
+func TestGeneratorClassifiesTemporaryCompletionFailure(t *testing.T) {
+	collector, _, _ := testCollector(t, true)
+	input, err := collector.Collect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := &fakeJSONCompletionClient{jsonErr: temporaryCompletionError{}}
+
+	_, err = (&Generator{LLM: llm}).Generate(t.Context(), input)
+	var failure *GenerationError
+	if !errors.As(err, &failure) || failure.Code != "model_transport_failed" {
+		t.Fatalf("expected temporary model transport failure, got %v", err)
 	}
 }
 

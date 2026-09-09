@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -22,6 +23,10 @@ type CompletionClient interface {
 
 type streamingCompletionClient interface {
 	Stream(context.Context, string, func(string) error) (string, error)
+}
+
+type structuredCompletionClient interface {
+	CompleteJSON(context.Context, string) (string, error)
 }
 
 type Generator struct {
@@ -44,6 +49,14 @@ type InputCapacityError struct{ Tokens, Limit int }
 func (e *InputCapacityError) Error() string {
 	return fmt.Sprintf("training orchestration input exceeds configured token limit %d: got %d", e.Limit, e.Tokens)
 }
+
+type GenerationError struct {
+	Code string
+	Err  error
+}
+
+func (e *GenerationError) Error() string { return e.Err.Error() }
+func (e *GenerationError) Unwrap() error { return e.Err }
 
 func (g *Generator) Generate(ctx context.Context, input InputPackage) (ProjectionDocument, error) {
 	if g == nil || g.LLM == nil {
@@ -82,25 +95,43 @@ func (g *Generator) Generate(ctx context.Context, input InputPackage) (Projectio
 		}
 	}
 	var raw string
-	if streaming, ok := g.LLM.(streamingCompletionClient); ok {
+	if structured, ok := g.LLM.(structuredCompletionClient); ok {
+		raw, err = structured.CompleteJSON(ctx, prompt)
+	} else if streaming, ok := g.LLM.(streamingCompletionClient); ok {
 		raw, err = streaming.Stream(ctx, prompt, nil)
 	} else {
 		raw, err = g.LLM.Complete(ctx, prompt)
 	}
 	if err != nil {
+		var incomplete interface{ IncompleteOutput() bool }
+		if errors.As(err, &incomplete) && incomplete.IncompleteOutput() {
+			return ProjectionDocument{}, &GenerationError{Code: "model_output_truncated", Err: fmt.Errorf("generate training orchestration: %w", err)}
+		}
+		var temporary interface{ Temporary() bool }
+		if errors.As(err, &temporary) && temporary.Temporary() {
+			return ProjectionDocument{}, &GenerationError{Code: "model_transport_failed", Err: fmt.Errorf("generate training orchestration: %w", err)}
+		}
+		var invalid interface{ InvalidOutput() bool }
+		if errors.As(err, &invalid) && invalid.InvalidOutput() {
+			return ProjectionDocument{}, &GenerationError{Code: "model_output_invalid", Err: fmt.Errorf("generate training orchestration: %w", err)}
+		}
 		return ProjectionDocument{}, fmt.Errorf("generate training orchestration: %w", err)
 	}
+	if tag, ok := unclosedLeadingReasoning(raw); ok {
+		return ProjectionDocument{}, &GenerationError{Code: "model_output_truncated", Err: fmt.Errorf("training orchestration model output ended before closing <%s> (output_bytes=%d)", tag, len(raw))}
+	}
+	normalized := stripJSONFence(raw)
 	var generated modelProjection
-	decoder := json.NewDecoder(bytes.NewReader(stripJSONFence(raw)))
+	decoder := json.NewDecoder(bytes.NewReader(normalized))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&generated); err != nil {
-		return ProjectionDocument{}, fmt.Errorf("decode training orchestration model output: %w", err)
+		return ProjectionDocument{}, &GenerationError{Code: "model_output_invalid", Err: fmt.Errorf("decode training orchestration model output: %w", err)}
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return ProjectionDocument{}, fmt.Errorf("decode training orchestration model output: trailing content")
+		return ProjectionDocument{}, &GenerationError{Code: "model_output_invalid", Err: fmt.Errorf("decode training orchestration model output: trailing content")}
 	}
 	if generated.TopicClusters == nil || generated.TopicClusterRelations == nil {
-		return ProjectionDocument{}, fmt.Errorf("decode training orchestration model output: topic arrays must be JSON arrays")
+		return ProjectionDocument{}, &GenerationError{Code: "model_output_invalid", Err: fmt.Errorf("decode training orchestration model output: topic arrays must be JSON arrays")}
 	}
 	projection.TopicClusters = generated.TopicClusters
 	projection.TopicClusterRelations = generated.TopicClusterRelations
@@ -120,9 +151,19 @@ func (g *Generator) Generate(ctx context.Context, input InputPackage) (Projectio
 	projection.Statistics = buildStatistics(input, projection.TopicClusters, selectedVideos, unitEvidence)
 	doc := ProjectionDocument{TrainingPathProjection: projection}
 	if err := ValidateProjection(doc, input); err != nil {
-		return ProjectionDocument{}, fmt.Errorf("reject training orchestration model output: %w", err)
+		return ProjectionDocument{}, &GenerationError{Code: "model_output_invalid", Err: fmt.Errorf("reject training orchestration model output: %w", err)}
 	}
 	return doc, nil
+}
+
+func unclosedLeadingReasoning(raw string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	for _, tag := range []string{"think", "analysis"} {
+		if strings.HasPrefix(lower, "<"+tag+">") && !strings.Contains(lower, "</"+tag+">") {
+			return tag, true
+		}
+	}
+	return "", false
 }
 
 func (g *Generator) promptVersion() string {
@@ -159,23 +200,55 @@ func buildPrompt(input InputPackage) (string, error) {
 
 func stripJSONFence(raw string) []byte {
 	trimmed := strings.TrimSpace(raw)
-	for _, tag := range []string{"think", "analysis"} {
-		opening := "<" + tag + ">"
-		closing := "</" + tag + ">"
-		if strings.HasPrefix(strings.ToLower(trimmed), opening) {
-			end := strings.Index(strings.ToLower(trimmed), closing)
-			if end < 0 {
-				return []byte(trimmed)
+	for {
+		before := trimmed
+		for _, tag := range []string{"think", "analysis"} {
+			if remainder, ok := stripLeadingTagBlock(trimmed, tag); ok {
+				trimmed = remainder
+				break
 			}
-			trimmed = strings.TrimSpace(trimmed[end+len(closing):])
 		}
-	}
-	if strings.HasPrefix(trimmed, "```") {
-		lines := strings.Split(trimmed, "\n")
-		if len(lines) >= 3 {
-			lines = lines[1 : len(lines)-1]
-			trimmed = strings.TrimSpace(strings.Join(lines, "\n"))
+		for _, tag := range []string{"final", "answer"} {
+			if inner, ok := unwrapTag(trimmed, tag); ok {
+				trimmed = inner
+				break
+			}
+		}
+		if strings.HasPrefix(trimmed, "```") {
+			lines := strings.Split(trimmed, "\n")
+			if len(lines) >= 3 && strings.TrimSpace(lines[len(lines)-1]) == "```" {
+				trimmed = strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+			}
+		}
+		if trimmed == before {
+			break
 		}
 	}
 	return []byte(trimmed)
+}
+
+func stripLeadingTagBlock(value, tag string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	lower := strings.ToLower(trimmed)
+	opening := "<" + tag + ">"
+	closing := "</" + tag + ">"
+	if !strings.HasPrefix(lower, opening) {
+		return value, false
+	}
+	end := strings.Index(lower, closing)
+	if end < 0 {
+		return value, false
+	}
+	return strings.TrimSpace(trimmed[end+len(closing):]), true
+}
+
+func unwrapTag(value, tag string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	lower := strings.ToLower(trimmed)
+	opening := "<" + tag + ">"
+	closing := "</" + tag + ">"
+	if !strings.HasPrefix(lower, opening) || !strings.HasSuffix(lower, closing) {
+		return value, false
+	}
+	return strings.TrimSpace(trimmed[len(opening) : len(trimmed)-len(closing)]), true
 }

@@ -634,7 +634,10 @@ func validSummaryPage(t *testing.T) weknora.WikiPage {
 	if !ok {
 		t.Fatal("training summary framework missing")
 	}
-	document := summary.Document{SchemaVersion: summary.SchemaVersion, VideoType: "training"}
+	document := summary.Document{
+		SchemaVersion: summary.SchemaVersion, VideoType: "training",
+		Classification: &summary.Classification{Confidence: 0.9, Reason: "转写内容属于培训", EvidenceChunkIDs: []string{testChunkID}},
+	}
 	for index, section := range framework {
 		document.Sections = append(document.Sections, summary.Section{
 			ID: section.ID, Title: section.Title,

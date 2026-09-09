@@ -402,7 +402,7 @@ func readSummary(
 		return nil, nil, false
 	}
 	document, err := summary.ParseStored(page.Content)
-	if err != nil || summary.ValidateStored(document, video.VideoType) != nil {
+	if err != nil || summary.ValidateStored(document, "") != nil {
 		return nil, nil, false
 	}
 	input := &SummaryInput{WikiReference: WikiReference{WikiPageID: page.ID, Version: page.Version}}

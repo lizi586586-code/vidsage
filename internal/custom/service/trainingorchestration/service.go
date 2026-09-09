@@ -159,7 +159,12 @@ func (s *Service) run(jobID string) {
 	}
 	doc, err := s.Generator.Generate(ctx, input)
 	if err != nil {
-		s.fail(jobID, "generation_failed", err)
+		code := "generation_failed"
+		var generationErr *GenerationError
+		if errors.As(err, &generationErr) && strings.TrimSpace(generationErr.Code) != "" {
+			code = generationErr.Code
+		}
+		s.fail(jobID, code, err)
 		return
 	}
 	if doc.TrainingPathProjection.SourceFingerprint != fingerprint {

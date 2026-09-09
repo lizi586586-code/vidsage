@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -169,6 +170,26 @@ func TestServiceDoesNotSwitchCurrentWhenSuccessUpdateFails(t *testing.T) {
 	}
 	if currentCount != 0 {
 		t.Fatalf("current result switched despite failed success update: %d", currentCount)
+	}
+}
+
+func TestServicePersistsSpecificModelOutputFailureCode(t *testing.T) {
+	input, _ := validServiceInputAndDocument(t)
+	db := newTrainingServiceDB(t)
+	wiki := &memoryProjectionWiki{}
+	llm := &fakeCompletionClient{output: "<think>sensitive reasoning must not be persisted"}
+	service := &Service{DB: db, Collector: staticInputCollector{input}, Generator: &Generator{LLM: llm, PromptVersion: "training-v1"}, Wiki: wiki, KnowledgeBaseID: testKBID, OwnerScopeID: input.OwnerScopeID, Model: llm.Model(), PromptVersion: "training-v1", RunTimeout: time.Second}
+
+	job, err := service.Start(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForTrainingJob(t, service, job.ID)
+	if job.Status != JobFailed || job.ErrorCode != "model_output_truncated" {
+		t.Fatalf("unexpected failed job: %#v", job)
+	}
+	if strings.Contains(job.ErrorMessage, "sensitive reasoning") || !strings.Contains(job.ErrorMessage, "output_bytes=") {
+		t.Fatalf("unsafe or incomplete diagnostic: %q", job.ErrorMessage)
 	}
 }
 

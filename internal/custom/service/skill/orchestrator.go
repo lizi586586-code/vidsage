@@ -594,7 +594,10 @@ func (o *Orchestrator) afterSkillCompleteWithID(ctx context.Context, videoID, jo
 				if err != nil {
 					return err
 				}
-				return o.ensureTranscriptSourceManifest(ctx, tx, nextJobID, generation, inputPayload)
+				if err := o.ensureTranscriptSourceManifest(ctx, tx, nextJobID, generation, inputPayload); err != nil {
+					return err
+				}
+				return o.restoreCompletedStatusAfterReusedAssemble(ctx, tx, videoID, nextJobID)
 			}
 		}
 		if jobType == JobGraph || jobType == JobSummary {
@@ -633,6 +636,31 @@ func (o *Orchestrator) afterSkillCompleteWithID(ctx context.Context, videoID, jo
 		return "", "", err
 	}
 	return wikiPageID, nextJobID, nil
+}
+
+// restoreCompletedStatusAfterReusedAssemble closes the state transition when a
+// summary or outline rerun reuses an already-succeeded assemble job. In that
+// case no new assemble worker callback runs, so the video status must be
+// reconciled here after the new foundation artifact is recorded.
+func (o *Orchestrator) restoreCompletedStatusAfterReusedAssemble(ctx context.Context, db *gorm.DB, videoID, assembleJobID string) error {
+	var assemble model.VideoProcessingJob
+	if err := db.WithContext(ctx).Select("status").First(&assemble, "id = ?", assembleJobID).Error; err != nil {
+		return fmt.Errorf("load assemble job after artifact update: %w", err)
+	}
+	if assemble.Status != "succeeded" {
+		return nil
+	}
+
+	var video model.Video
+	if err := db.WithContext(ctx).Select("outline_wiki_page_id", "summary_wiki_page_id", "transcript_page_wiki_page_id").First(&video, "id = ?", videoID).Error; err != nil {
+		return fmt.Errorf("reload video after reused assemble: %w", err)
+	}
+	if video.OutlineWikiPageID == "" || video.SummaryWikiPageID == "" || video.TranscriptPageWikiPageID == "" {
+		return nil
+	}
+	return db.WithContext(ctx).Model(&model.Video{}).Where("id = ?", videoID).Updates(map[string]any{
+		"status": model.VideoStatusCompleted, "processing_error_summary": "",
+	}).Error
 }
 
 func (o *Orchestrator) findWikiPageVersion(ctx context.Context, videoID, pageID string) (int, string, string, error) {

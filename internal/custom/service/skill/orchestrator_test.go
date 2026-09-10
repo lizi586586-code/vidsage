@@ -193,6 +193,71 @@ func TestAssembleRejectsIncompleteArtifactSet(t *testing.T) {
 	require.Empty(t, stored.TranscriptPageWikiPageID)
 }
 
+func TestExplicitSummaryRegenerationRestoresCompletedVideoWhenAssembleIsAlreadySucceeded(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	video := model.Video{
+		ID: "video-summary-rerun", Title: "test", Status: model.VideoStatusProcessing,
+		TranscriptGeneration: "generation-1", KnowledgeBaseWikiPageID: "knowledge-base",
+		OutlineWikiPageID: "outline", SummaryWikiPageID: "summary-old",
+		TranscriptPageWikiPageID: "transcript-page",
+	}
+	require.NoError(t, db.Create(&video).Error)
+	require.NoError(t, db.Create(&model.VideoTranscriptChunk{
+		VideoID: video.ID, Generation: video.TranscriptGeneration, ChunkIndex: 0,
+		KnowledgeID: "transcript-1", ContentHash: "hash-1", Status: "completed",
+	}).Error)
+	require.NoError(t, db.Create(&model.VideoTranscriptSource{
+		ID: "source-1", VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration,
+		KnowledgeBaseID: "kb-1", KnowledgeID: "source-1", ContentHash: "hash-source", Status: "created",
+	}).Error)
+	require.NoError(t, db.Create(&model.VideoProcessingJob{
+		ID: "assemble-succeeded", VideoID: video.ID, JobType: JobAssemble,
+		TranscriptGeneration: video.TranscriptGeneration, Status: "succeeded", ResultStage: "final",
+		IdempotencyKey: IdempotencyKey(video.ID, JobAssemble) + ":" + video.TranscriptGeneration,
+	}).Error)
+
+	orchestrator := NewOrchestrator(db, nil, "kb-1")
+	_, _, err := orchestrator.AfterExplicitSummaryRegeneration(t.Context(), video.ID, JobSummary, "summary-new")
+	require.NoError(t, err)
+
+	var stored model.Video
+	require.NoError(t, db.First(&stored, "id = ?", video.ID).Error)
+	require.Equal(t, model.VideoStatusCompleted, stored.Status)
+	require.Equal(t, "summary-new", stored.SummaryWikiPageID)
+}
+
+func TestExplicitSummaryRegenerationKeepsVideoProcessingWhileAssembleIsPending(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	video := model.Video{
+		ID: "video-summary-pending", Title: "test", Status: model.VideoStatusProcessing,
+		TranscriptGeneration: "generation-1", KnowledgeBaseWikiPageID: "knowledge-base",
+		OutlineWikiPageID: "outline", SummaryWikiPageID: "summary-old",
+		TranscriptPageWikiPageID: "transcript-page",
+	}
+	require.NoError(t, db.Create(&video).Error)
+	require.NoError(t, db.Create(&model.VideoTranscriptChunk{
+		VideoID: video.ID, Generation: video.TranscriptGeneration, ChunkIndex: 0,
+		KnowledgeID: "transcript-1", ContentHash: "hash-1", Status: "completed",
+	}).Error)
+	require.NoError(t, db.Create(&model.VideoTranscriptSource{
+		ID: "source-pending", VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration,
+		KnowledgeBaseID: "kb-1", KnowledgeID: "source-pending", ContentHash: "hash-source", Status: "created",
+	}).Error)
+	require.NoError(t, db.Create(&model.VideoProcessingJob{
+		ID: "assemble-pending", VideoID: video.ID, JobType: JobAssemble,
+		TranscriptGeneration: video.TranscriptGeneration, Status: "pending", ResultStage: "final",
+		IdempotencyKey: IdempotencyKey(video.ID, JobAssemble) + ":" + video.TranscriptGeneration,
+	}).Error)
+
+	orchestrator := NewOrchestrator(db, nil, "kb-1")
+	_, _, err := orchestrator.AfterExplicitSummaryRegeneration(t.Context(), video.ID, JobSummary, "summary-new")
+	require.NoError(t, err)
+
+	var stored model.Video
+	require.NoError(t, db.First(&stored, "id = ?", video.ID).Error)
+	require.Equal(t, model.VideoStatusProcessing, stored.Status)
+}
+
 func TestFindWikiPageDoesNotFallbackToTranscriptKnowledgeID(t *testing.T) {
 	db := newOrchestratorTestDB(t)
 	video := model.Video{ID: "video-1", Title: "test", TranscriptKnowledgeID: "transcript-page"}

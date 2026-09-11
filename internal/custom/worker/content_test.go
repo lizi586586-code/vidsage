@@ -196,6 +196,9 @@ func TestSkillQueryUsesTranscriptKnowledgeIDAsSourceDocument(t *testing.T) {
 	require.Contains(t, query, "evidence_sentence_ids")
 	require.Contains(t, query, "继续处理其他候选")
 	require.Contains(t, query, "至少一次成功写入并回读")
+	require.Contains(t, query, "关系阶段是硬性完成门禁")
+	require.Contains(t, query, "绝不能以 relations: []")
+	require.Contains(t, query, "至少一条 accepted formal relation")
 	require.Contains(t, query, "不得使用示例、占位内容或 mock 数据")
 	require.NotContains(t, query, "每个实体和每个知识原子都要写入独立 Wiki 页面")
 	require.NotContains(t, query, "methodology: input、steps、criteria、output、applicability")
@@ -642,8 +645,9 @@ func TestInspectP3KnowledgeRejectsMultiObjectBatchWithoutFormalRelations(t *test
 	}
 	server := p3WikiServer(t, []weknora.WikiPage{index, first, second})
 	defer server.Close()
+	agent := &countingAgentClient{}
 	handler := BaseSkillHandler{
-		DB: db, KnowledgeBaseID: "knowledge-kb",
+		DB: db, AgentClient: agent, KnowledgeBaseID: "knowledge-kb",
 		Orchestrator: skill.NewOrchestrator(
 			db,
 			weknora.NewWikiClient(config.WeKnoraConfig{BaseURL: server.URL}),
@@ -655,6 +659,20 @@ func TestInspectP3KnowledgeRejectsMultiObjectBatchWithoutFormalRelations(t *test
 	require.NoError(t, err)
 	require.Nil(t, artifacts)
 	require.Contains(t, strings.Join(invalid, "; "), "formal relation")
+
+	err = handler.repairP3KnowledgeOnce(
+		t.Context(), video, "基础请求。", []string{"source-1"}, skill.WikiPageBaseline{},
+		&contentprovenance.Job{
+			TaskID: "job-1", VideoID: video.ID,
+			TranscriptGeneration: video.TranscriptGeneration, JobType: skill.JobGraph,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, agent.queries, 1)
+	repairQuery := agent.queries[0]
+	require.Contains(t, repairQuery, "references/relation-contract.json")
+	require.Contains(t, repairQuery, "不得以 relations: []")
+	require.Contains(t, repairQuery, "规范对象 ID 和 Wiki 页面 ID")
 }
 
 func TestInspectP3KnowledgeRejectsEvidenceOutsideCurrentTranscriptGeneration(t *testing.T) {
@@ -888,7 +906,7 @@ func TestInspectP3KnowledgeAfterIgnoresUnchangedHistoricalInvalidPage(t *testing
 	require.Contains(t, strings.Join(invalid, "; "), "video index page was not created or updated in the current attempt")
 }
 
-func TestInspectP3KnowledgeAfterRejectsUnchangedHistoricalSemanticDuplicate(t *testing.T) {
+func TestInspectP3KnowledgeAfterFoldsUnchangedHistoricalSemanticDuplicate(t *testing.T) {
 	db := p3EvidenceDB(t)
 	video := &model.Video{ID: "video-1", Title: "测试视频", TranscriptGeneration: "generation-1"}
 	index := weknora.WikiPage{
@@ -922,8 +940,10 @@ func TestInspectP3KnowledgeAfterRejectsUnchangedHistoricalSemanticDuplicate(t *t
 
 	artifacts, invalid, err := handler.inspectP3KnowledgeAfter(t.Context(), video.ID, video.TranscriptGeneration, video.Title, baseline)
 	require.NoError(t, err)
-	require.Nil(t, artifacts)
-	require.Contains(t, strings.Join(invalid, "; "), "semantic identity")
+	require.Empty(t, invalid)
+	require.NotNil(t, artifacts)
+	require.Equal(t, "index-1", artifacts.Index.ID)
+	require.Equal(t, 1, artifacts.ObjectCount)
 }
 
 func TestRecordedP3KnowledgeIndexDoesNotRescanHistoricalObjects(t *testing.T) {

@@ -20,10 +20,47 @@ type staticInputCollector struct{ input InputPackage }
 
 func (c staticInputCollector) Collect(context.Context) (InputPackage, error) { return c.input, nil }
 
+type staticCatalogCollector struct {
+	snapshot CatalogSnapshot
+	calls    int
+}
+
+func (c *staticCatalogCollector) CollectCatalog(context.Context) (CatalogSnapshot, error) {
+	c.calls++
+	return c.snapshot, nil
+}
+
+type sequenceInputCollector struct {
+	inputs []InputPackage
+	index  int
+}
+
+func (c *sequenceInputCollector) Collect(context.Context) (InputPackage, error) {
+	if len(c.inputs) == 0 {
+		return InputPackage{}, nil
+	}
+	index := c.index
+	if index >= len(c.inputs) {
+		index = len(c.inputs) - 1
+	}
+	c.index++
+	return c.inputs[index], nil
+}
+
 type staticProjectionGenerator struct{ doc ProjectionDocument }
 
 func (g staticProjectionGenerator) Generate(context.Context, InputPackage) (ProjectionDocument, error) {
 	return g.doc, nil
+}
+
+type staticStageFourRunner struct {
+	doc   ProjectionDocument
+	calls int
+}
+
+func (r *staticStageFourRunner) Run(context.Context, CatalogSnapshot) (ProjectionDocument, error) {
+	r.calls++
+	return r.doc, nil
 }
 
 type memoryProjectionWiki struct {
@@ -76,7 +113,7 @@ func TestServicePublishesCurrentVersionAndReusesFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	first = waitForTrainingJob(t, service, first.ID)
-	if first.Status != JobSucceeded || first.Reused || first.ResultWikiPageID == "" || llm.calls != 1 {
+	if first.Status != JobSucceeded || first.Stage != StagePublishing || first.Reused || first.ResultWikiPageID == "" || llm.calls != 1 {
 		t.Fatalf("unexpected first job: %#v, calls=%d", first, llm.calls)
 	}
 	doc, current, err := service.GetCurrent(t.Context())
@@ -101,6 +138,75 @@ func TestServicePublishesCurrentVersionAndReusesFingerprint(t *testing.T) {
 	currentDoc, _, err := service.GetCurrent(t.Context())
 	if err != nil || len(currentDoc.TrainingPathProjection.TopicClusters[0].KnowledgeObjectIDs) != 0 {
 		t.Fatalf("knowledge metadata blocked or leaked from current Wiki: doc=%#v err=%v", currentDoc, err)
+	}
+}
+
+func TestServiceStopsBeforeModelWhenInputChangesDuringPreflight(t *testing.T) {
+	input, _ := validServiceInputAndDocument(t)
+	db := newTrainingServiceDB(t)
+	changed := input
+	changed.QualifiedVideos = append([]VideoTopicProfile(nil), input.QualifiedVideos...)
+	changed.QualifiedVideos[0].TranscriptGeneration = "new-generation"
+	collector := &sequenceInputCollector{inputs: []InputPackage{input, changed}}
+	llm := &fakeCompletionClient{output: "should-not-be-called"}
+	service := &Service{
+		DB: db, Collector: collector, Generator: &Generator{LLM: llm, PromptVersion: "training-v1"},
+		Wiki: &memoryProjectionWiki{}, KnowledgeBaseID: testKBID, OwnerScopeID: input.OwnerScopeID,
+		Model: llm.Model(), PromptVersion: "training-v1", RunTimeout: time.Second,
+	}
+
+	job, err := service.Start(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForTrainingJob(t, service, job.ID)
+	if job.Status != JobFailed || job.ErrorCode != "source_not_stable" {
+		t.Fatalf("unexpected unstable-input job: %#v", job)
+	}
+	if llm.calls != 0 {
+		t.Fatalf("model was called despite unstable preflight: %d", llm.calls)
+	}
+}
+
+func TestServiceUsesStageFourRunnerWhenConfigured(t *testing.T) {
+	video := validCatalogVideo("video-1")
+	video.Title = "视频一"
+	snapshot := CatalogSnapshot{ContractVersion: PlanningContractVersion, OwnerScopeID: "scope-1", Videos: []CatalogVideo{video}}
+	plan := validAcceptedPlan(snapshot)
+	plan.TopicClusters[0].Summary = "主题摘要"
+	modelName, promptVersion := "planner-model", "planning-v1"
+	fingerprint, err := CatalogFingerprint(snapshot, modelName, promptVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.SourceFingerprint = fingerprint
+	material := validStageFourMaterial(plan.TopicClusters[0].ClusterKey)
+	draft := validStageFourDraft(plan.TopicClusters[0].ClusterKey, material.Evidence[0])
+	doc, err := (&ProjectionAssembler{Fingerprint: stageFourFingerprint(modelName, promptVersion)}).Assemble(StageFourAssemblyInput{
+		InitialCatalog: snapshot, LatestCatalog: snapshot, Plan: plan,
+		Materials: []ClusterMaterial{material}, Drafts: []ClusterGenerationDraft{draft},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.TrainingPathProjection.RetrievalDegraded = true
+	doc.TrainingPathProjection.RetrievalDegradationReason = "search_unavailable"
+	catalog := &staticCatalogCollector{snapshot: snapshot}
+	runner := &staticStageFourRunner{doc: doc}
+	wiki := &memoryProjectionWiki{}
+	service := &Service{
+		DB: newTrainingServiceDB(t), CatalogCollector: catalog, StageFour: runner,
+		Wiki: wiki, KnowledgeBaseID: testKBID, OwnerScopeID: snapshot.OwnerScopeID,
+		Model: modelName, PromptVersion: promptVersion, RunTimeout: time.Second,
+	}
+
+	job, err := service.Start(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForTrainingJob(t, service, job.ID)
+	if job.Status != JobSucceeded || job.WarningCode != WarningEvidenceRetrievalDegraded || job.WarningMessage == "" || runner.calls != 1 || catalog.calls != 2 || wiki.writes != 1 {
+		t.Fatalf("stage-four runner was not used: job=%#v runner_calls=%d catalog_calls=%d wiki_writes=%d", job, runner.calls, catalog.calls, wiki.writes)
 	}
 }
 
@@ -190,6 +296,72 @@ func TestServicePersistsSpecificModelOutputFailureCode(t *testing.T) {
 	}
 	if strings.Contains(job.ErrorMessage, "sensitive reasoning") || !strings.Contains(job.ErrorMessage, "output_bytes=") {
 		t.Fatalf("unsafe or incomplete diagnostic: %q", job.ErrorMessage)
+	}
+}
+
+func TestServicePersistsSafeModelOutputReason(t *testing.T) {
+	input, _ := validServiceInputAndDocument(t)
+	db := newTrainingServiceDB(t)
+	service := &Service{
+		DB: db, Collector: staticInputCollector{input},
+		Generator: &Generator{
+			LLM:           &fakeCompletionClient{output: `{"topic_clusters":[{"unknown":true}]}`},
+			PromptVersion: "training-v1",
+		},
+		Wiki: &memoryProjectionWiki{}, KnowledgeBaseID: testKBID,
+		OwnerScopeID: input.OwnerScopeID, Model: "real-model",
+		PromptVersion: "training-v1", RunTimeout: time.Second,
+	}
+
+	job, err := service.Start(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForTrainingJob(t, service, job.ID)
+	if job.Status != JobFailed || job.ErrorCode != "model_output_invalid" {
+		t.Fatalf("unexpected failed job: %#v", job)
+	}
+	if !strings.Contains(job.ErrorMessage, "reason=json_unknown_field") {
+		t.Fatalf("safe model output reason was not persisted: %q", job.ErrorMessage)
+	}
+	if strings.Contains(job.ErrorMessage, "true") {
+		t.Fatalf("raw provider/model output leaked into task message: %q", job.ErrorMessage)
+	}
+}
+
+func TestServicePersistsSafeEvidenceReferenceReason(t *testing.T) {
+	input, _ := validServiceInputAndDocument(t)
+	modelOutput := validModelOutput(input)
+	modelOutput.TopicClusters[0].Path.Stages[0].Units[0].EvidenceRefs[0].EvidenceID = "invented-evidence"
+	raw, err := json.Marshal(modelOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := newTrainingServiceDB(t)
+	service := &Service{
+		DB: db, Collector: staticInputCollector{input},
+		Generator: &Generator{
+			LLM:           &fakeCompletionClient{output: string(raw)},
+			PromptVersion: "training-v1",
+		},
+		Wiki: &memoryProjectionWiki{}, KnowledgeBaseID: testKBID,
+		OwnerScopeID: input.OwnerScopeID, Model: "real-model",
+		PromptVersion: "training-v1", RunTimeout: time.Second,
+	}
+
+	job, err := service.Start(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForTrainingJob(t, service, job.ID)
+	if job.Status != JobFailed || job.ErrorCode != "model_output_invalid" {
+		t.Fatalf("unexpected failed job: %#v", job)
+	}
+	if !strings.Contains(job.ErrorMessage, "reason=evidence_reference_outside_whitelist") {
+		t.Fatalf("safe evidence reference reason was not persisted: %q", job.ErrorMessage)
+	}
+	if strings.Contains(job.ErrorMessage, "invented-evidence") {
+		t.Fatalf("raw evidence identifier leaked into task message: %q", job.ErrorMessage)
 	}
 }
 

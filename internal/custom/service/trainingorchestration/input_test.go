@@ -30,26 +30,25 @@ const (
 )
 
 type fakeWiki struct {
-	pages        map[string]weknora.WikiPage
-	listCount    int
-	lastPageType string
-	err          error
+	pages    map[string]weknora.WikiPage
+	getCount int
+	lastSlug string
+	err      error
 }
 
-func (f *fakeWiki) ListAllPages(_ context.Context, _, pageType string) ([]weknora.WikiPage, error) {
-	f.listCount++
-	f.lastPageType = pageType
+func (f *fakeWiki) GetPage(_ context.Context, _, slug string) (*weknora.WikiPage, error) {
+	f.getCount++
+	f.lastSlug = slug
 	if f.err != nil {
 		return nil, f.err
 	}
-	result := make([]weknora.WikiPage, 0, len(f.pages))
 	for _, page := range f.pages {
-		if pageType != "" && page.PageType != pageType {
-			continue
+		if page.Slug == slug {
+			copy := page
+			return &copy, nil
 		}
-		result = append(result, page)
 	}
-	return result, nil
+	return nil, nil
 }
 
 type fakeVideoAccess struct {
@@ -136,8 +135,8 @@ func TestCollectUsesFinalSummaryWithoutReadingNormalizedTranscript(t *testing.T)
 		profile.EvidenceSignals[0].TranscriptGeneration != testGeneration || profile.EvidenceSignals[0].EvidenceID != testEvidenceID {
 		t.Fatalf("unexpected evidence signals: %#v", profile.EvidenceSignals)
 	}
-	if wiki.listCount != 1 || wiki.lastPageType != "" {
-		t.Fatalf("unexpected Wiki snapshot reads: count=%d type=%q", wiki.listCount, wiki.lastPageType)
+	if wiki.getCount != 1 || wiki.lastSlug != "typed-summary/"+testVideoID {
+		t.Fatalf("unexpected Wiki summary read: count=%d slug=%q", wiki.getCount, wiki.lastSlug)
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
@@ -312,6 +311,39 @@ func TestCollectRejectsSummaryWhoseEvidencePointsAtWrongChunk(t *testing.T) {
 	}
 }
 
+func TestCollectRejectsSummaryProfileEvidenceOutsideCurrentGeneration(t *testing.T) {
+	collector, wiki, _ := testCollector(t, true)
+	page := wiki.pages["summary-page"]
+	document, err := summary.ParseStored(page.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.OrchestrationProfile = &summary.OrchestrationProfile{
+		SchemaVersion: 1, PrimaryTopic: "主题", TopicUnits: []summary.OrchestrationTopicUnit{{
+			Title: "单元", Abstract: "摘要", ContentForms: []string{"concept_cognition"}, LearningOutcomes: []string{"结果"},
+			SummaryBlockIDs: []string{"block-1"}, EvidenceChunkIDs: []string{"chunk-from-old-generation"},
+		}},
+	}
+	payload, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonStart := strings.Index(page.Content, "{")
+	if jsonStart < 0 {
+		t.Fatal("summary page JSON payload not found")
+	}
+	page.Content = page.Content[:jsonStart] + string(payload)
+	wiki.pages["summary-page"] = page
+
+	result, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.QualifiedVideos) != 0 || result.SkipReasonCounts[SkipFormalContentNotReady] != 1 {
+		t.Fatalf("summary with stale orchestration evidence was accepted: %#v", result)
+	}
+}
+
 func TestCollectAcceptsFinalSummaryWithoutKnowledgeReferences(t *testing.T) {
 	collector, wiki, _ := testCollector(t, true)
 	page := wiki.pages["summary-page"]
@@ -461,7 +493,7 @@ func TestCollectRejectsMoreThanOneHundredCandidatesBeforeContentReads(t *testing
 	if !errors.As(err, &capacityErr) || capacityErr.CandidateVideos != MaxCandidateVideos+1 {
 		t.Fatalf("expected capacity error, got result=%#v err=%v", result, err)
 	}
-	if wiki.listCount != 0 || sourceReader.readCount != 0 || transcriptReader.readCount != 0 {
+	if wiki.getCount != 0 || sourceReader.readCount != 0 || transcriptReader.readCount != 0 {
 		t.Fatal("content was read before the candidate capacity gate")
 	}
 }
@@ -495,8 +527,8 @@ func TestCollectReturnsEmptyPackageWithoutExternalReads(t *testing.T) {
 	if err != nil || result.ScannedVideos != 0 || len(result.QualifiedVideos) != 0 || len(result.SkippedVideos) != 0 {
 		t.Fatalf("empty input failed: result=%#v err=%v", result, err)
 	}
-	if wiki.listCount != 0 || access.readCount != 0 {
-		t.Fatalf("empty input performed external reads: wiki=%d access=%d", wiki.listCount, access.readCount)
+	if wiki.getCount != 0 || access.readCount != 0 {
+		t.Fatalf("empty input performed external reads: wiki=%d access=%d", wiki.getCount, access.readCount)
 	}
 }
 

@@ -6,13 +6,10 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"time"
-
-	"github.com/Tencent/WeKnora/internal/agent/token"
 )
 
 type CompletionClient interface {
@@ -31,6 +28,7 @@ type structuredCompletionClient interface {
 
 type Generator struct {
 	LLM            CompletionClient
+	Gate           *CompletionGate
 	MaxInputTokens int
 	PromptVersion  string
 	Now            func() time.Time
@@ -84,38 +82,13 @@ func (g *Generator) Generate(ctx context.Context, input InputPackage) (Projectio
 	if err != nil {
 		return ProjectionDocument{}, err
 	}
-	if g.MaxInputTokens > 0 {
-		estimator, estimatorErr := token.NewEstimator()
-		if estimatorErr != nil {
-			return ProjectionDocument{}, fmt.Errorf("initialize training orchestration tokenizer: %w", estimatorErr)
-		}
-		count := estimator.EstimateString(prompt)
-		if count > g.MaxInputTokens {
-			return ProjectionDocument{}, &InputCapacityError{Tokens: count, Limit: g.MaxInputTokens}
-		}
+	gate := g.Gate
+	if gate == nil {
+		gate = NewCompletionGate(CompletionGateConfig{})
 	}
-	var raw string
-	if structured, ok := g.LLM.(structuredCompletionClient); ok {
-		raw, err = structured.CompleteJSON(ctx, prompt)
-	} else if streaming, ok := g.LLM.(streamingCompletionClient); ok {
-		raw, err = streaming.Stream(ctx, prompt, nil)
-	} else {
-		raw, err = g.LLM.Complete(ctx, prompt)
-	}
+	raw, err := gate.Complete(ctx, g.LLM, "legacy_generation", "all", prompt, g.MaxInputTokens, nil)
 	if err != nil {
-		var incomplete interface{ IncompleteOutput() bool }
-		if errors.As(err, &incomplete) && incomplete.IncompleteOutput() {
-			return ProjectionDocument{}, &GenerationError{Code: "model_output_truncated", Err: fmt.Errorf("generate training orchestration: %w", err)}
-		}
-		var temporary interface{ Temporary() bool }
-		if errors.As(err, &temporary) && temporary.Temporary() {
-			return ProjectionDocument{}, &GenerationError{Code: "model_transport_failed", Err: fmt.Errorf("generate training orchestration: %w", err)}
-		}
-		var invalid interface{ InvalidOutput() bool }
-		if errors.As(err, &invalid) && invalid.InvalidOutput() {
-			return ProjectionDocument{}, &GenerationError{Code: "model_output_invalid", Err: fmt.Errorf("generate training orchestration: %w", err)}
-		}
-		return ProjectionDocument{}, fmt.Errorf("generate training orchestration: %w", err)
+		return ProjectionDocument{}, classifyCompletionError("generate training orchestration", err)
 	}
 	if tag, ok := unclosedLeadingReasoning(raw); ok {
 		return ProjectionDocument{}, &GenerationError{Code: "model_output_truncated", Err: fmt.Errorf("training orchestration model output ended before closing <%s> (output_bytes=%d)", tag, len(raw))}
@@ -125,6 +98,9 @@ func (g *Generator) Generate(ctx context.Context, input InputPackage) (Projectio
 	decoder := json.NewDecoder(bytes.NewReader(normalized))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&generated); err != nil {
+		if isIncompleteJSONError(err) {
+			return ProjectionDocument{}, &GenerationError{Code: "model_output_truncated", Err: fmt.Errorf("decode training orchestration model output: %w", err)}
+		}
 		return ProjectionDocument{}, &GenerationError{Code: "model_output_invalid", Err: fmt.Errorf("decode training orchestration model output: %w", err)}
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {

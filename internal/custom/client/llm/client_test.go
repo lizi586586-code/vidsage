@@ -119,16 +119,58 @@ func TestStreamUsesCallerDeadlineInsteadOfClientTotalTimeout(t *testing.T) {
 }
 
 func TestCompleteJSONDisablesThinkingAndRequiresCompletedStream(t *testing.T) {
-	client := NewClient(config.LLMConfig{BaseURL: "https://llm.example.test/v1", APIKey: "key", Model: "MiniMax-M3"})
+	client := NewClient(config.LLMConfig{BaseURL: "https://llm.example.test/v1", APIKey: "key", Model: "MiniMax-M3", MaxTokens: 8192})
 	client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(request.Body)
 		if err != nil {
 			t.Fatalf("read request body: %v", err)
 		}
-		for _, expected := range []string{`"stream":true`, `"response_format":{"type":"json_object"}`, `"thinking":{"type":"disabled"}`} {
+		for _, expected := range []string{`"stream":true`, `"max_completion_tokens":8192`, `"thinking":{"type":"disabled"}`} {
 			if !strings.Contains(string(body), expected) {
 				t.Fatalf("request body missing %s: %s", expected, body)
 			}
+		}
+		if strings.Contains(string(body), `"response_format"`) {
+			t.Fatalf("MiniMax-M3 request must omit unsupported response_format: %s", body)
+		}
+		stream := "data: " + `{"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}` + "\n\n" + "data: [DONE]\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}, nil
+	})
+
+	content, err := client.CompleteJSON(t.Context(), "prompt")
+	if err != nil || content != "{}" {
+		t.Fatalf("content=%q err=%v", content, err)
+	}
+}
+
+func TestMiniMaxCompleteJSONUsesSupportedRequestShape(t *testing.T) {
+	client := NewClient(config.LLMConfig{
+		BaseURL: "https://api.minimaxi.com/v1", APIKey: "key", Model: "MiniMax-M3", MaxTokens: 8192,
+	})
+	client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		var payload struct {
+			MaxTokens           int             `json:"max_tokens"`
+			MaxCompletionTokens int             `json:"max_completion_tokens"`
+			ResponseFormat      json.RawMessage `json:"response_format"`
+			Thinking            struct {
+				Type string `json:"type"`
+			} `json:"thinking"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.MaxTokens != 0 || payload.MaxCompletionTokens != 8192 {
+			t.Fatalf("unexpected token limit fields: %+v", payload)
+		}
+		if len(payload.ResponseFormat) != 0 {
+			t.Fatalf("MiniMax-M3 request must omit unsupported response_format: %s", body)
+		}
+		if payload.Thinking.Type != "disabled" {
+			t.Fatalf("unexpected thinking setting: %+v", payload.Thinking)
 		}
 		stream := "data: " + `{"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}` + "\n\n" + "data: [DONE]\n\n"
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}, nil

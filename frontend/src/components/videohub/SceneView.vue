@@ -232,6 +232,8 @@ import {
   fetchCurrentTrainingProjection,
   fetchTrainingJob,
   generateTrainingProjection,
+  trainingJobErrorMessage,
+  trainingJobWarningMessage,
   type TrainingEvidenceRef,
   type TrainingNotSelectedReason,
   type TrainingProjection,
@@ -415,6 +417,9 @@ async function loadCurrent() {
   warningMessage.value = ''
   try {
     projection.value = await fetchCurrentTrainingProjection()
+    if (projection.value?.retrieval_degraded) {
+      warningMessage.value = '证据召回降级，已使用规划证据完成生成。'
+    }
     const firstCluster = projection.value?.topic_clusters[0]
     selectedCluster.value = firstCluster?.cluster_id || ''
     selectedRelation.value = null
@@ -452,8 +457,11 @@ async function refresh() {
       job = await fetchTrainingJob(job.id)
       jobProgress.value = job.progress
     }
-    if (job.status === 'failed') throw new Error(job.error_message || '学习路径生成失败')
+    if (job.status === 'failed') throw new Error(trainingJobErrorMessage(job))
     await loadCurrent()
+    if (!warningMessage.value) {
+      warningMessage.value = trainingJobWarningMessage(job)
+    }
   } catch (cause) {
     errorMessage.value = errorText(cause, '学习路径生成失败')
   } finally {

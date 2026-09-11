@@ -38,11 +38,11 @@ test('graph page keeps one refresh action and removes partial status banners', (
   assert.match(scene, /defineExpose\(\{ refresh \}\)/)
 })
 
-test('graph page shows canvas node counts in filters without a scope progress ratio', () => {
+test('graph page shows actual canvas node counts only in filters', () => {
   const here = dirname(fileURLToPath(import.meta.url))
   const source = readFileSync(join(here, 'KnowledgeGraph.vue'), 'utf8')
 
-  assert.doesNotMatch(source, /visibleCount|counts\.scope_nodes/)
+  assert.doesNotMatch(source, /knowledge-graph__count|visibleCount|visibleRelationCount|counts\.scope_nodes/)
   assert.match(source, /catalogTotal\.value = next\.nodes\.length/)
   assert.match(source, /next\.nodes\.filter\(node => node\.attributes\.includes\(item\)\)\.length/)
   assert.match(source, /\[attribute\]: next\.nodes\.length/)

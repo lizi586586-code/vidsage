@@ -176,6 +176,21 @@ func TestGeneratorClassifiesUnclosedReasoningAsTruncated(t *testing.T) {
 	}
 }
 
+func TestGeneratorClassifiesIncompleteJSONAsTruncated(t *testing.T) {
+	collector, _, _ := testCollector(t, true)
+	input, err := collector.Collect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := &fakeCompletionClient{output: `{"topic_clusters":[`}
+
+	_, err = (&Generator{LLM: llm}).Generate(t.Context(), input)
+	var failure *GenerationError
+	if !errors.As(err, &failure) || failure.Code != "model_output_truncated" {
+		t.Fatalf("expected incomplete JSON to be classified as truncated, got %v", err)
+	}
+}
+
 func TestGeneratorClassifiesTemporaryCompletionFailure(t *testing.T) {
 	collector, _, _ := testCollector(t, true)
 	input, err := collector.Collect(t.Context())

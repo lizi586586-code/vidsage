@@ -46,13 +46,14 @@ type Message struct {
 }
 
 type completionRequest struct {
-	Model          string          `json:"model"`
-	Messages       []Message       `json:"messages"`
-	MaxTokens      int             `json:"max_tokens,omitempty"`
-	Temperature    float64         `json:"temperature"`
-	ResponseFormat *responseFormat `json:"response_format,omitempty"`
-	Thinking       *thinkingConfig `json:"thinking,omitempty"`
-	Stream         bool            `json:"stream,omitempty"`
+	Model               string          `json:"model"`
+	Messages            []Message       `json:"messages"`
+	MaxTokens           int             `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
+	Temperature         float64         `json:"temperature"`
+	ResponseFormat      *responseFormat `json:"response_format,omitempty"`
+	Thinking            *thinkingConfig `json:"thinking,omitempty"`
+	Stream              bool            `json:"stream,omitempty"`
 }
 
 type responseFormat struct {
@@ -252,13 +253,7 @@ func (c *Client) complete(ctx context.Context, messages []Message) (string, erro
 		}
 	}
 
-	body, err := json.Marshal(completionRequest{
-		Model:          c.cfg.Model,
-		Temperature:    0,
-		ResponseFormat: &responseFormat{Type: "json_object"},
-		Messages:       messages,
-		MaxTokens:      c.cfg.MaxTokens,
-	})
+	body, err := json.Marshal(c.newCompletionRequest(messages, false))
 	if err != nil {
 		return "", fmt.Errorf("encode llm request: %w", err)
 	}
@@ -333,11 +328,8 @@ func (c *Client) stream(ctx context.Context, prompt string, onDelta func(string)
 	if strings.TrimSpace(prompt) == "" {
 		return "", fmt.Errorf("llm prompt 不能为空")
 	}
-	request := completionRequest{
-		Model: c.cfg.Model, Temperature: 0, ResponseFormat: &responseFormat{Type: "json_object"}, Stream: true,
-		Messages: []Message{{Role: "user", Content: prompt}}, MaxTokens: c.cfg.MaxTokens,
-	}
-	if options.disableThinking {
+	request := c.newCompletionRequest([]Message{{Role: "user", Content: prompt}}, true)
+	if options.disableThinking && c.isMiniMaxModel() {
 		request.Thinking = &thinkingConfig{Type: "disabled"}
 	}
 	body, err := json.Marshal(request)
@@ -482,4 +474,34 @@ streamLoop:
 		return "", fmt.Errorf("llm stream contains no content")
 	}
 	return output.String(), nil
+}
+
+func (c *Client) isMiniMaxModel() bool {
+	if c == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.cfg.Model)), "minimax-")
+}
+
+func (c *Client) newCompletionRequest(messages []Message, stream bool) completionRequest {
+	request := completionRequest{
+		Model:          c.cfg.Model,
+		Temperature:    0,
+		ResponseFormat: c.jsonResponseFormat(),
+		Stream:         stream,
+		Messages:       messages,
+	}
+	if c.isMiniMaxModel() {
+		request.MaxCompletionTokens = c.cfg.MaxTokens
+	} else {
+		request.MaxTokens = c.cfg.MaxTokens
+	}
+	return request
+}
+
+func (c *Client) jsonResponseFormat() *responseFormat {
+	if c == nil || c.isMiniMaxModel() {
+		return nil
+	}
+	return &responseFormat{Type: "json_object"}
 }

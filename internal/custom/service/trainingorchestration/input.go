@@ -54,7 +54,7 @@ func (e *CapacityError) Error() string {
 }
 
 type WikiReader interface {
-	ListAllPages(context.Context, string, string) ([]weknora.WikiPage, error)
+	GetPage(context.Context, string, string) (*weknora.WikiPage, error)
 }
 
 type KnowledgeReader interface {
@@ -115,10 +115,12 @@ type WikiReference struct {
 
 type SummaryInput struct {
 	WikiReference
-	Signals []SummarySignal `json:"signals"`
+	Signals              []SummarySignal               `json:"signals"`
+	OrchestrationProfile *summary.OrchestrationProfile `json:"orchestration_profile,omitempty"`
 }
 
 type SummarySignal struct {
+	BlockID       string              `json:"block_id"`
 	Section       string              `json:"section"`
 	Text          string              `json:"text"`
 	KnowledgeRefs []string            `json:"knowledge_refs"`
@@ -169,36 +171,6 @@ type EvidenceSignal struct {
 	TranscriptSnippet    string `json:"transcript_snippet"`
 }
 
-type wikiSnapshot struct {
-	byID map[string]weknora.WikiPage
-}
-
-func newWikiSnapshot(pages []weknora.WikiPage) (wikiSnapshot, error) {
-	snapshot := wikiSnapshot{
-		byID: make(map[string]weknora.WikiPage, len(pages)),
-	}
-	for _, page := range pages {
-		id := strings.TrimSpace(page.ID)
-		if id == "" {
-			continue
-		}
-		if _, duplicate := snapshot.byID[id]; duplicate {
-			return wikiSnapshot{}, fmt.Errorf("training orchestration Wiki snapshot contains duplicate page id %s", id)
-		}
-		snapshot.byID[id] = page
-	}
-	return snapshot, nil
-}
-
-func (s wikiSnapshot) pageByID(id string) *weknora.WikiPage {
-	page, ok := s.byID[strings.TrimSpace(id)]
-	if !ok {
-		return nil
-	}
-	copy := page
-	return &copy
-}
-
 func (c *Collector) Collect(ctx context.Context) (InputPackage, error) {
 	result := InputPackage{
 		SchemaVersion: SchemaVersion,
@@ -247,21 +219,8 @@ func (c *Collector) Collect(ctx context.Context) (InputPackage, error) {
 	if err != nil {
 		return result, fmt.Errorf("check training orchestration video access: %w", err)
 	}
-	wiki := wikiSnapshot{byID: map[string]weknora.WikiPage{}}
-	if anyVideoNeedsSummaryWiki(videos, accessibility) {
-		// Typed summaries are stored as index pages; the frontmatter and the
-		// persisted SummaryWikiPageID define the artifact type and identity.
-		pages, err := c.Wiki.ListAllPages(ctx, c.KnowledgeBaseID, "")
-		if err != nil {
-			return result, fmt.Errorf("read training orchestration Wiki snapshot: %w", err)
-		}
-		wiki, err = newWikiSnapshot(pages)
-		if err != nil {
-			return result, err
-		}
-	}
 	for _, video := range videos {
-		profile, reason, err := c.collectVideo(ctx, video, accessibility[video.ID], wiki)
+		profile, reason, err := c.collectVideo(ctx, video, accessibility[video.ID])
 		if err != nil {
 			return result, fmt.Errorf("collect training orchestration input for video %s: %w", video.ID, err)
 		}
@@ -276,16 +235,241 @@ func (c *Collector) Collect(ctx context.Context) (InputPackage, error) {
 	return result, nil
 }
 
-func anyVideoNeedsSummaryWiki(videos []model.Video, accessibility map[string]bool) bool {
+// CollectCatalog builds the bounded stage-one input while keeping the legacy
+// InputPackage collector available to the stage-four compatibility path.
+func (c *Collector) CollectCatalog(ctx context.Context) (CatalogSnapshot, error) {
+	if err := c.validate(); err != nil {
+		return CatalogSnapshot{}, err
+	}
+	result := CatalogSnapshot{ContractVersion: PlanningContractVersion, OwnerScopeID: strings.TrimSpace(c.OwnerScopeID), Videos: []CatalogVideo{}, SkippedVideos: []SkippedVideo{}}
+	candidateQuery := func() *gorm.DB {
+		return c.DB.WithContext(ctx).Model(&model.Video{}).
+			Where("uploaded_at IS NOT NULL AND TRIM(COALESCE(file_url, '')) <> '' AND status IN ?", append(model.VideoInitiallyAvailableStatuses(), model.VideoStatusFailed))
+	}
+	var scanned int64
+	if err := candidateQuery().Count(&scanned).Error; err != nil {
+		return CatalogSnapshot{}, fmt.Errorf("count training orchestration catalog candidates: %w", err)
+	}
+	if scanned > MaxCandidateVideos {
+		return CatalogSnapshot{}, &CapacityError{CandidateVideos: int(scanned)}
+	}
+	var videos []model.Video
+	if err := candidateQuery().Order("id ASC").Find(&videos).Error; err != nil {
+		return CatalogSnapshot{}, fmt.Errorf("list training orchestration catalog candidates: %w", err)
+	}
+	accessCandidates := make([]model.Video, 0, len(videos))
 	for _, video := range videos {
-		if video.Status != model.VideoStatusFailed && accessibility[video.ID] &&
-			strings.TrimSpace(video.TranscriptGeneration) != "" && video.TranscriptActiveRevision > 0 &&
-			strings.TrimSpace(video.SummaryWikiPageID) != "" &&
-			strings.EqualFold(strings.TrimSpace(video.SummaryResultStage), "final_ready") {
-			return true
+		if video.Status != model.VideoStatusFailed {
+			accessCandidates = append(accessCandidates, video)
 		}
 	}
-	return false
+	accessibility, err := c.VideoAccess.CheckAccessible(ctx, accessCandidates)
+	if err != nil {
+		return CatalogSnapshot{}, fmt.Errorf("check training orchestration catalog video access: %w", err)
+	}
+	for _, video := range videos {
+		catalogVideo, reason, collectErr := c.collectCatalogVideo(ctx, video, accessibility[video.ID])
+		if collectErr != nil {
+			return CatalogSnapshot{}, collectErr
+		}
+		if reason != "" {
+			result.SkippedVideos = append(result.SkippedVideos, SkippedVideo{VideoID: video.ID, Reason: reason})
+			continue
+		}
+		result.Videos = append(result.Videos, catalogVideo)
+	}
+	snapshot := CatalogSnapshot{
+		ContractVersion: PlanningContractVersion,
+		OwnerScopeID:    result.OwnerScopeID,
+		SkippedVideos:   result.SkippedVideos,
+		Videos:          result.Videos,
+	}
+	sort.Slice(snapshot.Videos, func(i, j int) bool { return snapshot.Videos[i].VideoID < snapshot.Videos[j].VideoID })
+	sort.Slice(snapshot.SkippedVideos, func(i, j int) bool { return snapshot.SkippedVideos[i].VideoID < snapshot.SkippedVideos[j].VideoID })
+	fingerprint, err := CatalogFingerprint(snapshot, "", "")
+	if err != nil {
+		return CatalogSnapshot{}, err
+	}
+	snapshot.SourceFingerprint = fingerprint
+	return snapshot, nil
+}
+
+func (c *Collector) collectCatalogVideo(ctx context.Context, video model.Video, accessible bool) (CatalogVideo, SkipReason, error) {
+	result := CatalogVideo{VideoID: video.ID, Title: video.Title, VideoType: video.VideoType, DurationSeconds: video.DurationSeconds, TranscriptGeneration: video.TranscriptGeneration}
+	if video.Status == model.VideoStatusFailed {
+		return result, SkipProcessingFailed, nil
+	}
+	if !accessible {
+		return result, SkipInaccessible, nil
+	}
+	if strings.TrimSpace(video.TranscriptGeneration) == "" || video.TranscriptActiveRevision <= 0 {
+		return result, SkipProcessing, nil
+	}
+	checkpoints, ok, err := c.readCatalogEvidenceManifest(ctx, video)
+	if err != nil {
+		return result, "", err
+	}
+	if !ok {
+		return result, SkipEvidenceMissing, nil
+	}
+	evidence := make([]EvidenceSignal, 0, len(checkpoints))
+	for _, checkpoint := range checkpoints {
+		evidence = append(evidence, EvidenceSignal{VideoID: video.ID, TranscriptGeneration: video.TranscriptGeneration, EvidenceID: checkpoint.EvidenceSentenceID, ChunkKnowledgeID: checkpoint.KnowledgeID, StartMs: checkpoint.StartMs, EndMs: checkpoint.EndMs})
+	}
+	if strings.TrimSpace(video.SummaryWikiPageID) != "" && strings.EqualFold(strings.TrimSpace(video.SummaryResultStage), "final_ready") {
+		page, err := c.Wiki.GetPage(ctx, c.KnowledgeBaseID, "typed-summary/"+video.ID)
+		if err != nil {
+			return result, "", fmt.Errorf("read typed summary for video %s: %w", video.ID, err)
+		}
+		document, parseErr := summary.ParseStored(func() string {
+			if page == nil {
+				return ""
+			}
+			return page.Content
+		}())
+		if page == nil || parseErr != nil || !summaryPageMatches(page, video) || summary.ValidateStored(document, "") != nil {
+			return result, SkipFormalContentNotReady, nil
+		}
+		known := make(map[string]struct{}, len(checkpoints))
+		for _, checkpoint := range checkpoints {
+			known[checkpoint.KnowledgeID] = struct{}{}
+		}
+		if err := summary.ValidateOrchestrationProfile(document, known); err != nil {
+			return result, SkipFormalContentValidationFailed, nil
+		}
+		result.SummaryWikiPageID = page.ID
+		result.SummaryVersion = page.Version
+		result.OrchestrationProfile = boundedProfile(document.OrchestrationProfile, summarySignalsFromDocument(document, checkpoints), evidence)
+		return result, "", nil
+	}
+	result.CompatibilityProfile = compatibilityProfile(nil, evidence)
+	return result, "", nil
+}
+
+func (c *Collector) readCatalogEvidenceManifest(ctx context.Context, video model.Video) ([]model.VideoTranscriptChunk, bool, error) {
+	var checkpoints []model.VideoTranscriptChunk
+	if err := c.DB.WithContext(ctx).Where("video_id = ? AND generation = ?", video.ID, video.TranscriptGeneration).Order("chunk_index ASC").Find(&checkpoints).Error; err != nil {
+		return nil, false, fmt.Errorf("read catalog evidence manifest: %w", err)
+	}
+	if len(checkpoints) == 0 {
+		return nil, false, nil
+	}
+	seenEvidence, seenKnowledge := map[string]struct{}{}, map[string]struct{}{}
+	for index, checkpoint := range checkpoints {
+		if checkpoint.ChunkIndex != index || checkpoint.Revision != video.TranscriptActiveRevision || checkpoint.Status != "completed" || checkpoint.EvidenceSentenceID == "" || checkpoint.KnowledgeID == "" || checkpoint.StartMs < 0 || checkpoint.EndMs <= checkpoint.StartMs || (video.DurationSeconds > 0 && checkpoint.EndMs > video.DurationSeconds*1000) {
+			return nil, false, nil
+		}
+		if _, ok := seenEvidence[checkpoint.EvidenceSentenceID]; ok {
+			return nil, false, nil
+		}
+		if _, ok := seenKnowledge[checkpoint.KnowledgeID]; ok {
+			return nil, false, nil
+		}
+		seenEvidence[checkpoint.EvidenceSentenceID] = struct{}{}
+		seenKnowledge[checkpoint.KnowledgeID] = struct{}{}
+	}
+	return checkpoints, true, nil
+}
+
+func summarySignalsFromDocument(document summary.Document, checkpoints []model.VideoTranscriptChunk) []SummarySignal {
+	known := make(map[string]model.VideoTranscriptChunk, len(checkpoints))
+	for _, checkpoint := range checkpoints {
+		known[checkpoint.KnowledgeID] = checkpoint
+	}
+	result := make([]SummarySignal, 0, 5)
+	for _, section := range document.Sections {
+		for _, block := range section.Blocks {
+			if len(result) >= 5 || strings.TrimSpace(block.Text) == "" {
+				continue
+			}
+			signal := SummarySignal{BlockID: block.ID, Section: section.Title, Text: block.Text, KnowledgeRefs: []string{}, EvidenceRefs: []EvidenceReference{}}
+			for _, ref := range summaryEvidenceReferences(block) {
+				if _, ok := known[ref.ChunkKnowledgeID]; !ok {
+					continue
+				}
+				signal.EvidenceRefs = append(signal.EvidenceRefs, ref)
+			}
+			if len(signal.EvidenceRefs) > 0 {
+				result = append(result, signal)
+			}
+		}
+	}
+	return result
+}
+
+func (v *CatalogVideo) normalize() {
+	v.VideoID = strings.TrimSpace(v.VideoID)
+	v.Title = strings.TrimSpace(v.Title)
+	v.VideoType = strings.TrimSpace(v.VideoType)
+	v.TranscriptGeneration = strings.TrimSpace(v.TranscriptGeneration)
+	v.SummaryWikiPageID = strings.TrimSpace(v.SummaryWikiPageID)
+}
+
+func boundedProfile(profile *summary.OrchestrationProfile, signals []SummarySignal, evidence []EvidenceSignal) *summary.OrchestrationProfile {
+	if profile != nil {
+		copy := *profile
+		copy.TopicUnits = append([]summary.OrchestrationTopicUnit(nil), profile.TopicUnits...)
+		return &copy
+	}
+	units := make([]summary.OrchestrationTopicUnit, 0, 5)
+	for index, signal := range signals {
+		if index >= 5 {
+			break
+		}
+		unit := summary.OrchestrationTopicUnit{Title: signal.Section, Abstract: boundedText(signal.Text, 240), ContentForms: []string{"concept_cognition"}, LearningOutcomes: []string{}, SummaryBlockIDs: []string{}, EvidenceChunkIDs: []string{}}
+		if signal.BlockID != "" {
+			unit.SummaryBlockIDs = []string{signal.BlockID}
+		}
+		for _, ref := range signal.EvidenceRefs {
+			unit.EvidenceChunkIDs = appendUnique(unit.EvidenceChunkIDs, ref.ChunkKnowledgeID)
+			unit.EvidenceRefs = append(unit.EvidenceRefs, summary.EvidenceRef{ChunkID: ref.ChunkKnowledgeID, EvidenceSentenceID: ref.EvidenceID, StartMs: ref.StartMs, EndMs: ref.EndMs})
+		}
+		units = append(units, unit)
+	}
+	return &summary.OrchestrationProfile{SchemaVersion: summary.OrchestrationProfileSchemaVersion, PrimaryTopic: firstProfileTitle(units), TopicUnits: units}
+}
+
+func compatibilityProfile(signals []TranscriptSignal, evidence []EvidenceSignal) *summary.OrchestrationProfile {
+	units := make([]summary.OrchestrationTopicUnit, 0, 5)
+	for index, signal := range signals {
+		if index >= 5 {
+			break
+		}
+		unit := summary.OrchestrationTopicUnit{Title: signal.Chapter, Abstract: boundedText(signal.Text, 240), ContentForms: []string{"concept_cognition"}, LearningOutcomes: []string{}, SummaryBlockIDs: []string{}, EvidenceChunkIDs: []string{}}
+		for _, ref := range signal.EvidenceRefs {
+			unit.EvidenceChunkIDs = appendUnique(unit.EvidenceChunkIDs, ref.ChunkKnowledgeID)
+			unit.EvidenceRefs = append(unit.EvidenceRefs, summary.EvidenceRef{ChunkID: ref.ChunkKnowledgeID, EvidenceSentenceID: ref.EvidenceID, StartMs: ref.StartMs, EndMs: ref.EndMs})
+		}
+		units = append(units, unit)
+	}
+	if len(units) == 0 && len(evidence) > 0 {
+		units = append(units, summary.OrchestrationTopicUnit{Title: "视频主题", Abstract: boundedText(evidence[0].TranscriptSnippet, 240), ContentForms: []string{"concept_cognition"}, EvidenceChunkIDs: []string{evidence[0].ChunkKnowledgeID}, EvidenceRefs: []summary.EvidenceRef{{ChunkID: evidence[0].ChunkKnowledgeID, EvidenceSentenceID: evidence[0].EvidenceID, StartMs: evidence[0].StartMs, EndMs: evidence[0].EndMs}}})
+	}
+	return &summary.OrchestrationProfile{SchemaVersion: summary.OrchestrationProfileSchemaVersion, PrimaryTopic: firstProfileTitle(units), TopicUnits: units}
+}
+
+func firstProfileTitle(units []summary.OrchestrationTopicUnit) string {
+	if len(units) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(units[0].Title)
+}
+
+func boundedText(value string, max int) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) <= max {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:max]))
+}
+
+func appendUnique(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" || contains(values, value) {
+		return values
+	}
+	return append(values, value)
 }
 
 func (c *Collector) validate() error {
@@ -298,7 +482,7 @@ func (c *Collector) validate() error {
 	return nil
 }
 
-func (c *Collector) collectVideo(ctx context.Context, video model.Video, accessible bool, wiki wikiSnapshot) (VideoTopicProfile, SkipReason, error) {
+func (c *Collector) collectVideo(ctx context.Context, video model.Video, accessible bool) (VideoTopicProfile, SkipReason, error) {
 	profile := VideoTopicProfile{
 		VideoID: video.ID, Title: video.Title, VideoType: video.VideoType,
 		DurationSeconds: video.DurationSeconds, TranscriptGeneration: video.TranscriptGeneration,
@@ -330,7 +514,11 @@ func (c *Collector) collectVideo(ctx context.Context, video model.Video, accessi
 	requiredEvidence := make(map[string]transcript.Chunk)
 
 	if strings.TrimSpace(video.SummaryWikiPageID) != "" && strings.EqualFold(strings.TrimSpace(video.SummaryResultStage), "final_ready") {
-		summaryInput, summaryEvidence, ok := readSummary(wiki, video, evidence)
+		page, readErr := c.Wiki.GetPage(ctx, c.KnowledgeBaseID, "typed-summary/"+video.ID)
+		if readErr != nil {
+			return profile, "", fmt.Errorf("read typed summary for video %s: %w", video.ID, readErr)
+		}
+		summaryInput, summaryEvidence, ok := readSummary(page, video, evidence)
 		if !ok {
 			return profile, SkipFormalContentNotReady, nil
 		}
@@ -393,11 +581,10 @@ func (c *Collector) validateEvidenceManifest(ctx context.Context, video model.Vi
 }
 
 func readSummary(
-	wiki wikiSnapshot,
+	page *weknora.WikiPage,
 	video model.Video,
 	evidence map[string]transcript.Chunk,
 ) (*SummaryInput, map[string]transcript.Chunk, bool) {
-	page := wiki.pageByID(video.SummaryWikiPageID)
 	if page == nil || !summaryPageMatches(page, video) {
 		return nil, nil, false
 	}
@@ -405,7 +592,17 @@ func readSummary(
 	if err != nil || summary.ValidateStored(document, "") != nil {
 		return nil, nil, false
 	}
-	input := &SummaryInput{WikiReference: WikiReference{WikiPageID: page.ID, Version: page.Version}}
+	knownChunkIDs := make(map[string]struct{}, len(evidence))
+	for _, chunk := range evidence {
+		// Summary contracts use the immutable transcript chunk/knowledge ID
+		// for model references. The evidence-sentence ID remains the
+		// cross-version jump reference and is projected separately below.
+		knownChunkIDs[chunk.ID] = struct{}{}
+	}
+	if err := summary.ValidateOrchestrationProfile(document, knownChunkIDs); err != nil {
+		return nil, nil, false
+	}
+	input := &SummaryInput{WikiReference: WikiReference{WikiPageID: page.ID, Version: page.Version}, OrchestrationProfile: document.OrchestrationProfile}
 	required := make(map[string]transcript.Chunk)
 	for _, section := range document.Sections {
 		for _, block := range section.Blocks {
@@ -423,7 +620,7 @@ func readSummary(
 				required[ref.EvidenceID] = chunk
 			}
 			input.Signals = append(input.Signals, SummarySignal{
-				Section: section.Title, Text: strings.TrimSpace(block.Text),
+				BlockID: block.ID, Section: section.Title, Text: strings.TrimSpace(block.Text),
 				KnowledgeRefs: []string{}, EvidenceRefs: verified,
 			})
 		}
@@ -499,7 +696,10 @@ func (c *Collector) readNormalizedTranscript(ctx context.Context, video model.Vi
 
 func summaryPageMatches(page *weknora.WikiPage, video model.Video) bool {
 	frontmatter := page.ParsedFrontmatter()
-	return strings.EqualFold(frontmatterString(frontmatter, "type"), "typed_summary") &&
+	return strings.TrimSpace(page.ID) == strings.TrimSpace(video.SummaryWikiPageID) &&
+		strings.TrimSpace(page.Slug) == "typed-summary/"+video.ID &&
+		(video.SummaryWikiPageVersion <= 0 || page.Version == video.SummaryWikiPageVersion) &&
+		strings.EqualFold(frontmatterString(frontmatter, "type"), "typed_summary") &&
 		frontmatterString(frontmatter, "source_video_id") == video.ID &&
 		frontmatterString(frontmatter, "transcript_generation") == video.TranscriptGeneration
 }

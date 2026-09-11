@@ -1,11 +1,14 @@
 import { get, post } from '@/utils/request'
 import { assertSupportedTrainingProjection } from './trainingOrchestrationContract'
 
+export { trainingJobErrorMessage, trainingJobWarningMessage } from './trainingOrchestrationErrors'
+
 export type TrainingRelationType = 'required_before' | 'recommended_before' | 'application' | 'complementary' | 'contrast'
 export type KnowledgeType = 'entity' | 'concept' | 'case' | 'methodology' | 'insight'
 export type TrainingSkipReason = 'processing' | 'processing_failed' | 'knowledge_not_ready' | 'knowledge_audit_failed' | 'evidence_missing' | 'inaccessible'
 export type TrainingNotSelectedReason = 'redundant_evidence' | 'output_limit'
 export type TrainingTopicSource = 'final_summary' | 'normalized_transcript'
+export type TrainingJobStage = 'collecting' | 'planning' | 'materializing' | 'generating' | 'assembling' | 'publishing'
 
 export interface TrainingEvidenceRef {
   video_id: string
@@ -61,6 +64,8 @@ export interface TrainingProjection {
   owner_scope_id: string
   source_fingerprint: string
   generated_at: string
+  retrieval_degraded?: boolean
+  retrieval_degradation_reason?: string
   statistics: {
     scanned_videos: number
     qualified_videos: number
@@ -93,10 +98,13 @@ export interface TrainingProjection {
 export interface TrainingJob {
   id: string
   status: 'queued' | 'running' | 'succeeded' | 'failed'
+  stage?: TrainingJobStage
   progress: number
   result_wiki_page_id?: string
   error_code?: string
   error_message?: string
+  warning_code?: string
+  warning_message?: string
   reused: boolean
 }
 

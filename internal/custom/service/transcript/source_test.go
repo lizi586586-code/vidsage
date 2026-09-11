@@ -13,6 +13,7 @@ import (
 
 	"github.com/Tencent/WeKnora/internal/custom/client/weknora"
 	"github.com/Tencent/WeKnora/internal/custom/model"
+	"github.com/Tencent/WeKnora/internal/custom/service/evidence"
 )
 
 type sourceGateway struct {
@@ -223,6 +224,73 @@ func TestSourceWriterSeparatesGenerationsAndRejectsHashChange(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "content hash mismatch")
 	require.Len(t, gateway.created, 2)
+}
+
+func TestSourceWriterRepairsLegacyUnknownSpeakerEvidenceIDs(t *testing.T) {
+	db := openSourceTestDB(t)
+	gateway := &sourceGateway{items: make(map[string]weknora.ManualKnowledgeResult)}
+	writer := &SourceWriter{DB: db, Gateway: gateway, KBID: "kb-1"}
+
+	const (
+		videoID    = "video-legacy-speaker"
+		generation = "generation-legacy-speaker"
+	)
+	legacyEvidence, err := evidence.BuildSentence(evidence.Input{
+		VideoID: videoID, TranscriptGeneration: generation, Ordinal: 0,
+		SourceSentenceID: "sentence-1", Text: "历史原文", SpeakerID: "",
+		StartMs: 100, EndMs: 1000,
+	})
+	require.NoError(t, err)
+	legacyDoc, err := Build(Input{
+		VideoID: videoID, TranscriptGeneration: generation, Title: "历史视频", DurationSeconds: 30,
+		Chapters: []InputChapter{{Index: 0, Title: "历史视频", Paragraphs: []InputParagraph{{
+			Index: 0, SpeakerID: "", Sentences: []InputSentence{{
+				SourceSentenceID: "sentence-1", EvidenceSentenceID: legacyEvidence.ID,
+				Text: "历史原文", SpeakerID: "", StartMs: 100, EndMs: 1000,
+			}},
+		}}}},
+	})
+	require.NoError(t, err)
+	legacyJSON, err := legacyDoc.JSON()
+	require.NoError(t, err)
+	legacyHash := fmt.Sprintf("%x", sha256.Sum256([]byte(legacyJSON)))
+	gateway.items["legacy-source"] = weknora.ManualKnowledgeResult{
+		ID: "legacy-source", KnowledgeBaseID: "kb-1", Title: SourceTitle(legacyDoc.Title),
+		Content: SourceContent(legacyDoc, legacyJSON, legacyHash), ParseStatus: "completed",
+	}
+	require.NoError(t, db.Create(&model.VideoTranscriptSource{
+		ID: "legacy-binding", VideoID: videoID, TranscriptGeneration: generation,
+		KnowledgeBaseID: "kb-1", KnowledgeID: "legacy-source", ContentHash: legacyHash, Status: SourceStatusCreated,
+	}).Error)
+
+	currentEvidence, err := evidence.BuildSentence(evidence.Input{
+		VideoID: videoID, TranscriptGeneration: generation, Ordinal: 0,
+		SourceSentenceID: "sentence-1", Text: "历史原文", SpeakerID: "0",
+		StartMs: 100, EndMs: 1000,
+	})
+	require.NoError(t, err)
+	currentDoc, err := Build(Input{
+		VideoID: videoID, TranscriptGeneration: generation, Title: "历史视频", DurationSeconds: 30,
+		Chapters: []InputChapter{{Index: 0, Title: "历史视频", Paragraphs: []InputParagraph{{
+			Index: 0, SpeakerID: "0", Sentences: []InputSentence{{
+				SourceSentenceID: "sentence-1", EvidenceSentenceID: currentEvidence.ID,
+				Text: "历史原文", SpeakerID: "0", StartMs: 100, EndMs: 1000,
+			}},
+		}}}},
+	})
+	require.NoError(t, err)
+
+	result, err := writer.Ensure(context.Background(), SourceInput{Document: currentDoc})
+	require.NoError(t, err)
+	require.Equal(t, "created", result.Action)
+	require.NotEqual(t, "legacy-source", result.KnowledgeID)
+	require.Len(t, gateway.created, 1)
+
+	var binding model.VideoTranscriptSource
+	require.NoError(t, db.First(&binding, "id = ?", "legacy-binding").Error)
+	require.Equal(t, result.KnowledgeID, binding.KnowledgeID)
+	require.Equal(t, SourceStatusCreated, binding.Status)
+	require.NotEqual(t, legacyHash, binding.ContentHash)
 }
 
 func TestSourceWriterRecordsFailureWithoutBindingSuccess(t *testing.T) {

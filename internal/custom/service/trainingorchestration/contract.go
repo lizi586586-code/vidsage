@@ -9,18 +9,31 @@ import (
 	"github.com/Tencent/WeKnora/internal/custom/service/knowledge"
 )
 
+const (
+	// The first-release page can render at most 20 clusters. Each accepted
+	// cluster is independently capped at 16 units by cluster generation, so a
+	// 120-unit aggregate rejected otherwise-valid plans whenever the model
+	// produced more than roughly six units per cluster. Keep an aggregate
+	// guard, but align it with the per-cluster contract and leave headroom for
+	// the 20-cluster upper bound without allowing an unbounded document.
+	maxProjectionTopicClusters = 20
+	maxProjectionLearningUnits = 240
+)
+
 type ProjectionDocument struct {
 	TrainingPathProjection Projection `json:"training_path_projection"`
 }
 
 type Projection struct {
-	SchemaVersion         string                 `json:"schema_version"`
-	OwnerScopeID          string                 `json:"owner_scope_id"`
-	SourceFingerprint     string                 `json:"source_fingerprint"`
-	GeneratedAt           string                 `json:"generated_at"`
-	Statistics            ProjectionStatistics   `json:"statistics"`
-	TopicClusters         []TopicCluster         `json:"topic_clusters"`
-	TopicClusterRelations []TopicClusterRelation `json:"topic_cluster_relations"`
+	SchemaVersion              string                 `json:"schema_version"`
+	OwnerScopeID               string                 `json:"owner_scope_id"`
+	SourceFingerprint          string                 `json:"source_fingerprint"`
+	GeneratedAt                string                 `json:"generated_at"`
+	RetrievalDegraded          bool                   `json:"retrieval_degraded,omitempty"`
+	RetrievalDegradationReason string                 `json:"retrieval_degradation_reason,omitempty"`
+	Statistics                 ProjectionStatistics   `json:"statistics"`
+	TopicClusters              []TopicCluster         `json:"topic_clusters"`
+	TopicClusterRelations      []TopicClusterRelation `json:"topic_cluster_relations"`
 }
 
 type ProjectionStatistics struct {
@@ -33,6 +46,7 @@ type ProjectionStatistics struct {
 	SkippedReasonCounts    map[SkipReason]int     `json:"skipped_reason_counts"`
 	TopicSourceCounts      map[TopicSource]int    `json:"topic_source_counts"`
 	TopicClusterCount      int                    `json:"topic_cluster_count"`
+	LearningUnitCount      int                    `json:"learning_unit_count"`
 	SelectedKnowledgeCount int                    `json:"selected_knowledge_count"`
 	LearningDurationSecs   int                    `json:"learning_duration_seconds"`
 }
@@ -192,7 +206,7 @@ func ValidateProjection(doc ProjectionDocument, input InputPackage) error {
 			return fmt.Errorf("topic_clusters[%d]: %w", i, err)
 		}
 	}
-	if len(p.TopicClusters) > 20 || len(unitIDs) > 120 {
+	if len(p.TopicClusters) > maxProjectionTopicClusters || len(unitIDs) > maxProjectionLearningUnits {
 		return fmt.Errorf("projection exceeds the first-release output capacity")
 	}
 	relationIDs := make(map[string]struct{}, len(p.TopicClusterRelations))
@@ -480,7 +494,13 @@ func hasRequiredBeforeCycle(relations []TopicClusterRelation) bool {
 
 func buildStatistics(input InputPackage, clusters []TopicCluster, selectedVideos map[string]struct{}, unitEvidence []EvidenceRef) ProjectionStatistics {
 	notSelected := len(input.QualifiedVideos) - len(selectedVideos)
-	stats := ProjectionStatistics{ScannedVideos: input.ScannedVideos, QualifiedVideos: len(input.QualifiedVideos), SelectedVideos: len(selectedVideos), NotSelectedVideos: notSelected, SkippedVideos: len(input.SkippedVideos), TopicClusterCount: len(clusters), SelectedKnowledgeCount: 0, LearningDurationSecs: mergedEvidenceDurationSeconds(unitEvidence), SkippedReasonCounts: input.SkipReasonCounts, TopicSourceCounts: input.TopicSourceCounts}
+	learningUnitCount := 0
+	for _, cluster := range clusters {
+		for _, stage := range cluster.Path.Stages {
+			learningUnitCount += len(stage.Units)
+		}
+	}
+	stats := ProjectionStatistics{ScannedVideos: input.ScannedVideos, QualifiedVideos: len(input.QualifiedVideos), SelectedVideos: len(selectedVideos), NotSelectedVideos: notSelected, SkippedVideos: len(input.SkippedVideos), TopicClusterCount: len(clusters), LearningUnitCount: learningUnitCount, SelectedKnowledgeCount: 0, LearningDurationSecs: mergedEvidenceDurationSeconds(unitEvidence), SkippedReasonCounts: input.SkipReasonCounts, TopicSourceCounts: input.TopicSourceCounts}
 	stats.NotSelectedReasonCount.RedundantEvidence = notSelected
 	return stats
 }

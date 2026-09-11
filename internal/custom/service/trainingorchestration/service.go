@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -22,13 +24,30 @@ const (
 	JobRunning   = "running"
 	JobSucceeded = "succeeded"
 	JobFailed    = "failed"
+
+	StageCollecting    = "collecting"
+	StagePlanning      = "planning"
+	StageMaterializing = "materializing"
+	StageGenerating    = "generating"
+	StageAssembling    = "assembling"
+	StagePublishing    = "publishing"
+
+	WarningEvidenceRetrievalDegraded = "evidence_retrieval_degraded"
 )
+
+const warningEvidenceRetrievalDegradedMessage = "证据召回降级，已使用规划证据完成生成。"
 
 type InputCollector interface {
 	Collect(context.Context) (InputPackage, error)
 }
+type CatalogCollector interface {
+	CollectCatalog(context.Context) (CatalogSnapshot, error)
+}
 type ProjectionGenerator interface {
 	Generate(context.Context, InputPackage) (ProjectionDocument, error)
+}
+type StageFourRunner interface {
+	Run(context.Context, CatalogSnapshot) (ProjectionDocument, error)
 }
 type ProjectionWiki interface {
 	EnsurePage(context.Context, string, weknora.WikiPageWrite) (*weknora.WikiPage, error)
@@ -36,17 +55,20 @@ type ProjectionWiki interface {
 }
 
 type Service struct {
-	DB              *gorm.DB
-	Collector       InputCollector
-	Generator       ProjectionGenerator
-	Wiki            ProjectionWiki
-	KnowledgeBaseID string
-	OwnerScopeID    string
-	Model           string
-	PromptVersion   string
-	RunTimeout      time.Duration
-	mu              sync.Mutex
-	running         map[string]struct{}
+	DB               *gorm.DB
+	Collector        InputCollector
+	Generator        ProjectionGenerator
+	CatalogCollector CatalogCollector
+	StageFour        StageFourRunner
+	Wiki             ProjectionWiki
+	KnowledgeBaseID  string
+	OwnerScopeID     string
+	Model            string
+	PromptVersion    string
+	RunTimeout       time.Duration
+	CompletionGate   *CompletionGate
+	mu               sync.Mutex
+	running          map[string]struct{}
 }
 
 func (s *Service) Start(ctx context.Context) (model.TrainingOrchestrationJob, error) {
@@ -70,7 +92,10 @@ func (s *Service) Start(ctx context.Context) (model.TrainingOrchestrationJob, er
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return model.TrainingOrchestrationJob{}, fmt.Errorf("find active training orchestration job: %w", err)
 	}
-	job := model.TrainingOrchestrationJob{ID: uuid.NewString(), OwnerScopeID: s.OwnerScopeID, Status: JobQueued, Progress: 0, Model: s.Model, PromptVersion: s.PromptVersion}
+	if s.CompletionGate != nil {
+		s.CompletionGate.Reset()
+	}
+	job := model.TrainingOrchestrationJob{ID: uuid.NewString(), OwnerScopeID: s.OwnerScopeID, Status: JobQueued, Stage: StageCollecting, Progress: 0, Model: s.Model, PromptVersion: s.PromptVersion}
 	if err := s.DB.WithContext(ctx).Create(&job).Error; err != nil {
 		return model.TrainingOrchestrationJob{}, fmt.Errorf("create training orchestration job: %w", err)
 	}
@@ -135,7 +160,11 @@ func (s *Service) run(jobID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	now := time.Now().UTC()
-	if err := s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ? AND status = ?", jobID, JobQueued).Updates(map[string]any{"status": JobRunning, "progress": 5, "started_at": now, "updated_at": now}).Error; err != nil {
+	if err := s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ? AND status = ?", jobID, JobQueued).Updates(map[string]any{"status": JobRunning, "stage": StageCollecting, "progress": 5, "started_at": now, "updated_at": now}).Error; err != nil {
+		return
+	}
+	if s.CatalogCollector != nil && s.StageFour != nil {
+		s.runStageFour(ctx, jobID)
 		return
 	}
 	input, err := s.Collector.Collect(ctx)
@@ -148,6 +177,24 @@ func (s *Service) run(jobID string) {
 		s.fail(jobID, "fingerprint_failed", err)
 		return
 	}
+	// The catalog is assembled from records that may still be changing while
+	// background video processing runs. Confirm the same source immediately
+	// before spending model budget; the later post-generation recheck remains
+	// the final publication guard.
+	stableInput, err := s.Collector.Collect(ctx)
+	if err != nil {
+		s.fail(jobID, "source_stability_check_failed", err)
+		return
+	}
+	stableFingerprint, err := SourceFingerprint(stableInput, s.Model, s.PromptVersion)
+	if err != nil {
+		s.fail(jobID, "fingerprint_failed", err)
+		return
+	}
+	if stableFingerprint != fingerprint {
+		s.fail(jobID, "source_not_stable", fmt.Errorf("training orchestration sources changed before generation started"))
+		return
+	}
 	inputRefs, _ := json.Marshal(inputReferenceSnapshot(input))
 	_ = s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{"progress": 25, "source_fingerprint": fingerprint, "input_references": string(inputRefs)}).Error
 	var current model.TrainingOrchestrationCurrent
@@ -155,6 +202,10 @@ func (s *Service) run(jobID string) {
 		if err := s.succeed(ctx, jobID, current.ResultWikiPageID, true); err != nil {
 			s.fail(jobID, "job_update_failed", err)
 		}
+		return
+	}
+	if err := s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{"stage": StageGenerating, "updated_at": time.Now().UTC()}).Error; err != nil {
+		s.fail(jobID, "job_update_failed", err)
 		return
 	}
 	doc, err := s.Generator.Generate(ctx, input)
@@ -176,7 +227,10 @@ func (s *Service) run(jobID string) {
 		s.fail(jobID, "generation_validation_failed", err)
 		return
 	}
-	s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Update("progress", 75)
+	if err := s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{"stage": StageAssembling, "progress": 75, "updated_at": time.Now().UTC()}).Error; err != nil {
+		s.fail(jobID, "job_update_failed", err)
+		return
+	}
 	latest, err := s.Collector.Collect(ctx)
 	if err != nil {
 		s.fail(jobID, "source_recheck_failed", err)
@@ -190,6 +244,10 @@ func (s *Service) run(jobID string) {
 	content, err := json.Marshal(doc)
 	if err != nil {
 		s.fail(jobID, "encode_result_failed", err)
+		return
+	}
+	if err := s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{"stage": StagePublishing, "updated_at": time.Now().UTC()}).Error; err != nil {
+		s.fail(jobID, "job_update_failed", err)
 		return
 	}
 	page, err := s.Wiki.EnsurePage(ctx, s.KnowledgeBaseID, weknora.WikiPageWrite{Slug: projectionSlug(s.OwnerScopeID, fingerprint), Title: "培训学习路径 " + time.Now().Format("2006-01-02 15:04"), PageType: "index", Status: "published", Content: string(content), Summary: "由当前视频、正式总结或规范化转写与字幕证据生成的培训学习路径", SourceRefs: projectionSourceRefs(input), ChunkRefs: projectionChunkRefs(input)})
@@ -214,13 +272,118 @@ func (s *Service) run(jobID string) {
 		s.fail(jobID, "wiki_publish_validation_failed", err)
 		return
 	}
-	if err := s.publishCurrent(ctx, jobID, page.ID, fingerprint); err != nil {
+	warningCode, warningMessage := projectionWarning(doc)
+	if err := s.publishCurrent(ctx, jobID, page.ID, fingerprint, warningCode, warningMessage); err != nil {
 		s.fail(jobID, "current_switch_failed", err)
 		return
 	}
 }
 
-func (s *Service) publishCurrent(ctx context.Context, jobID, pageID, fingerprint string) error {
+// runStageFour executes the bounded two-stage pipeline behind the existing
+// HTTP job contract. The legacy path remains available when the new runner is
+// not configured, which keeps local rollback cheap and explicit.
+func (s *Service) runStageFour(ctx context.Context, jobID string) {
+	snapshot, err := s.CatalogCollector.CollectCatalog(ctx)
+	if err != nil {
+		s.fail(jobID, "input_collection_failed", err)
+		return
+	}
+	fingerprint, err := CatalogFingerprint(snapshot, s.Model, s.PromptVersion)
+	if err != nil {
+		s.fail(jobID, "fingerprint_failed", err)
+		return
+	}
+	// Collect twice before any model call. A changed transcript, summary or
+	// video set is rejected before spending model budget.
+	stableSnapshot, err := s.CatalogCollector.CollectCatalog(ctx)
+	if err != nil {
+		s.fail(jobID, "source_stability_check_failed", err)
+		return
+	}
+	stableFingerprint, err := CatalogFingerprint(stableSnapshot, s.Model, s.PromptVersion)
+	if err != nil {
+		s.fail(jobID, "fingerprint_failed", err)
+		return
+	}
+	if stableFingerprint != fingerprint {
+		s.fail(jobID, "source_not_stable", fmt.Errorf("training orchestration sources changed before generation started"))
+		return
+	}
+	refs, _ := json.Marshal(catalogReferenceSnapshot(snapshot))
+	if err := s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{
+		"progress": 25, "source_fingerprint": fingerprint, "input_references": string(refs), "stage": StagePlanning, "updated_at": time.Now().UTC(),
+	}).Error; err != nil {
+		s.fail(jobID, "job_update_failed", err)
+		return
+	}
+	var current model.TrainingOrchestrationCurrent
+	if err := s.DB.WithContext(ctx).Where("owner_scope_id = ? AND source_fingerprint = ?", s.OwnerScopeID, fingerprint).First(&current).Error; err == nil {
+		if err := s.succeed(ctx, jobID, current.ResultWikiPageID, true); err != nil {
+			s.fail(jobID, "job_update_failed", err)
+		}
+		return
+	}
+	if err := s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{"stage": StageGenerating, "updated_at": time.Now().UTC()}).Error; err != nil {
+		s.fail(jobID, "job_update_failed", err)
+		return
+	}
+	doc, err := s.StageFour.Run(ctx, snapshot)
+	if err != nil {
+		code := "generation_failed"
+		var generationErr *GenerationError
+		if errors.As(err, &generationErr) && strings.TrimSpace(generationErr.Code) != "" {
+			code = generationErr.Code
+		}
+		s.fail(jobID, code, err)
+		return
+	}
+	if doc.TrainingPathProjection.SourceFingerprint != fingerprint {
+		s.fail(jobID, "generation_validation_failed", fmt.Errorf("training orchestration stage-four fingerprint does not match the job input"))
+		return
+	}
+	if err := s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{"stage": StageAssembling, "progress": 75, "updated_at": time.Now().UTC()}).Error; err != nil {
+		s.fail(jobID, "job_update_failed", err)
+		return
+	}
+	content, err := json.Marshal(doc)
+	if err != nil {
+		s.fail(jobID, "encode_result_failed", err)
+		return
+	}
+	if err := s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{"stage": StagePublishing, "updated_at": time.Now().UTC()}).Error; err != nil {
+		s.fail(jobID, "job_update_failed", err)
+		return
+	}
+	page, err := s.Wiki.EnsurePage(ctx, s.KnowledgeBaseID, weknora.WikiPageWrite{
+		Slug: projectionSlug(s.OwnerScopeID, fingerprint), Title: "培训学习路径 " + time.Now().Format("2006-01-02 15:04"),
+		PageType: "index", Status: "published", Content: string(content),
+		Summary:    "由当前视频、正式总结或规范化转写与字幕证据生成的培训学习路径",
+		SourceRefs: catalogSourceRefs(snapshot), ChunkRefs: catalogChunkRefs(snapshot),
+	})
+	if err != nil {
+		s.fail(jobID, "wiki_publish_failed", err)
+		return
+	}
+	if page == nil {
+		s.fail(jobID, "wiki_publish_failed", fmt.Errorf("training orchestration Wiki writer returned no page"))
+		return
+	}
+	var published ProjectionDocument
+	if err := json.Unmarshal([]byte(page.Content), &published); err != nil {
+		s.fail(jobID, "wiki_publish_validation_failed", err)
+		return
+	}
+	if published.TrainingPathProjection.SourceFingerprint != fingerprint || published.TrainingPathProjection.OwnerScopeID != s.OwnerScopeID || published.TrainingPathProjection.SchemaVersion != SchemaVersion || !reflect.DeepEqual(published, doc) {
+		s.fail(jobID, "wiki_publish_validation_failed", fmt.Errorf("published training orchestration identity is invalid"))
+		return
+	}
+	warningCode, warningMessage := projectionWarning(doc)
+	if err := s.publishCurrent(ctx, jobID, page.ID, fingerprint, warningCode, warningMessage); err != nil {
+		s.fail(jobID, "current_switch_failed", err)
+	}
+}
+
+func (s *Service) publishCurrent(ctx context.Context, jobID, pageID, fingerprint, warningCode, warningMessage string) error {
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var job model.TrainingOrchestrationJob
 		if err := tx.Where("id = ? AND owner_scope_id = ? AND status = ?", jobID, s.OwnerScopeID, JobRunning).First(&job).Error; err != nil {
@@ -231,24 +394,44 @@ func (s *Service) publishCurrent(ctx context.Context, jobID, pageID, fingerprint
 		if err := tx.Save(&current).Error; err != nil {
 			return err
 		}
-		return tx.Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{"status": JobSucceeded, "progress": 100, "result_wiki_page_id": pageID, "reused": false, "finished_at": now, "updated_at": now}).Error
+		return tx.Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{
+			"status": JobSucceeded, "progress": 100, "result_wiki_page_id": pageID, "reused": false,
+			"warning_code": strings.TrimSpace(warningCode), "warning_message": strings.TrimSpace(warningMessage),
+			"finished_at": now, "updated_at": now,
+		}).Error
 	})
 }
 
 func (s *Service) succeed(ctx context.Context, jobID, pageID string, reused bool) error {
 	now := time.Now().UTC()
-	return s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{"status": JobSucceeded, "progress": 100, "result_wiki_page_id": pageID, "reused": reused, "finished_at": now, "updated_at": now}).Error
+	return s.DB.WithContext(ctx).Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{
+		"status": JobSucceeded, "progress": 100, "result_wiki_page_id": pageID, "reused": reused,
+		"warning_code": "", "warning_message": "",
+		"finished_at": now, "updated_at": now,
+	}).Error
+}
+
+func projectionWarning(doc ProjectionDocument) (string, string) {
+	if !doc.TrainingPathProjection.RetrievalDegraded {
+		return "", ""
+	}
+	return WarningEvidenceRetrievalDegraded, warningEvidenceRetrievalDegradedMessage
 }
 func (s *Service) fail(jobID, code string, err error) {
 	now := time.Now().UTC()
-	message := ""
-	if err != nil {
-		message = err.Error()
-	}
+	slog.Warn("training orchestration job failed",
+		"job_id", jobID,
+		"error_code", strings.TrimSpace(code),
+		"safe_reason", safeErrorReason(err),
+		"error_type", fmt.Sprintf("%T", err),
+	)
+	message := safeTaskErrorMessage(code, err)
 	s.DB.Model(&model.TrainingOrchestrationJob{}).Where("id = ?", jobID).Updates(map[string]any{"status": JobFailed, "error_code": code, "error_message": message, "finished_at": now, "updated_at": now})
 }
 func (s *Service) validate() error {
-	if s == nil || s.DB == nil || s.Collector == nil || s.Generator == nil || s.Wiki == nil || strings.TrimSpace(s.KnowledgeBaseID) == "" || strings.TrimSpace(s.OwnerScopeID) == "" {
+	legacyReady := s != nil && s.Collector != nil && s.Generator != nil
+	stageFourReady := s != nil && s.CatalogCollector != nil && s.StageFour != nil
+	if s == nil || s.DB == nil || (!legacyReady && !stageFourReady) || s.Wiki == nil || strings.TrimSpace(s.KnowledgeBaseID) == "" || strings.TrimSpace(s.OwnerScopeID) == "" {
 		return fmt.Errorf("training orchestration service dependencies are not configured")
 	}
 	return nil
@@ -273,6 +456,77 @@ func inputReferenceSnapshot(input InputPackage) []inputReference {
 			item.EvidenceIDs = append(item.EvidenceIDs, e.EvidenceID)
 		}
 		out = append(out, item)
+	}
+	return out
+}
+
+func catalogReferenceSnapshot(snapshot CatalogSnapshot) []inputReference {
+	out := make([]inputReference, 0, len(snapshot.Videos))
+	for _, video := range snapshot.Videos {
+		item := inputReference{VideoID: video.VideoID, TranscriptGeneration: video.TranscriptGeneration, SummaryWikiPageID: video.SummaryWikiPageID}
+		profile := video.OrchestrationProfile
+		if profile == nil {
+			profile = video.CompatibilityProfile
+		}
+		if profile != nil {
+			for _, unit := range profile.TopicUnits {
+				for _, ref := range unit.EvidenceRefs {
+					item.EvidenceIDs = appendUnique(item.EvidenceIDs, ref.EvidenceSentenceID)
+				}
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func catalogSourceRefs(snapshot CatalogSnapshot) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	for _, video := range snapshot.Videos {
+		add(video.SummaryWikiPageID)
+	}
+	return out
+}
+
+func catalogChunkRefs(snapshot CatalogSnapshot) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	for _, video := range snapshot.Videos {
+		profile := video.OrchestrationProfile
+		if profile == nil {
+			profile = video.CompatibilityProfile
+		}
+		if profile == nil {
+			continue
+		}
+		for _, unit := range profile.TopicUnits {
+			for _, ref := range unit.EvidenceRefs {
+				add(ref.ChunkID)
+			}
+		}
 	}
 	return out
 }

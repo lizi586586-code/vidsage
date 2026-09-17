@@ -142,6 +142,38 @@ func TestServiceAcceptsPromptBundleFingerprintAsJobVersion(t *testing.T) {
 	}
 }
 
+func TestServiceReclaimsStaleActiveMeetingJob(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:meeting-orchestration-stale-job?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.MeetingOrchestrationJob{}); err != nil {
+		t.Fatal(err)
+	}
+	staleAt := time.Now().UTC().Add(-time.Hour)
+	stale := model.MeetingOrchestrationJob{ID: "stale-job", OwnerScopeID: "scope", Status: JobRunning, Stage: StageCollecting, Progress: 10, CreatedAt: staleAt, UpdatedAt: staleAt}
+	if err := db.Create(&stale).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{DB: db, OwnerScopeID: "scope", RunTimeout: time.Minute}
+	job, err := service.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.ID == stale.ID {
+		t.Fatalf("stale job was reused: %+v", job)
+	}
+	var reclaimed model.MeetingOrchestrationJob
+	if err := db.First(&reclaimed, "id = ?", stale.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed.Status != JobFailed || reclaimed.ErrorCode != "model_timeout" || reclaimed.FinishedAt == nil {
+		t.Fatalf("stale job was not failed safely: %+v", reclaimed)
+	}
+	// The new job has no generator and no eligible videos, so it will finish
+	// asynchronously; the test only verifies stale-job reclamation at Start.
+}
+
 func TestServiceDoesNotPublishTitleFallbackWhenEvidenceIsInsufficient(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:meeting-orchestration-test-insufficient?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {

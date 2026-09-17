@@ -42,6 +42,17 @@ type knowledgeUpdater interface {
 	UpdateManualKnowledge(context.Context, string, weknora.ManualKnowledgeInput) (weknora.ManualKnowledgeResult, error)
 }
 
+func nativeKnowledgeProcessOverrides() *types.KnowledgeProcessOverrides {
+	wikiEnabled := true
+	graphEnabled := true
+	extractConfig := types.ExtractConfig{Enabled: true}
+	return &types.KnowledgeProcessOverrides{
+		WikiEnabled:   &wikiEnabled,
+		GraphEnabled:  &graphEnabled,
+		ExtractConfig: &extractConfig,
+	}
+}
+
 type SourceWriter struct {
 	DB      *gorm.DB
 	Gateway KnowledgeGateway
@@ -192,10 +203,9 @@ func (w *SourceWriter) Ensure(ctx context.Context, input SourceInput) (SourceRes
 		}
 	}
 	if knowledge == nil {
-		wikiEnabled := false
 		value, createErr := w.Gateway.CreateManualKnowledge(ctx, w.KBID, weknora.ManualKnowledgeInput{
 			Title: title, Content: sourceContent, Status: "publish", Channel: "api",
-			ProcessConfig: &types.KnowledgeProcessOverrides{WikiEnabled: &wikiEnabled},
+			ProcessConfig: nativeKnowledgeProcessOverrides(),
 		})
 		if createErr != nil {
 			return result, w.fail(binding.ID, result, fmt.Errorf("create transcript source: %w", createErr))
@@ -328,14 +338,13 @@ func (w *SourceWriter) repairLegacySpeakerIdentity(
 		if encodeErr != nil || !changed || normalizedJSON != documentJSON {
 			return fmt.Errorf("source differs beyond canonical missing-speaker normalization")
 		}
-		wikiEnabled := false
 		updater, ok := w.Gateway.(knowledgeUpdater)
 		if !ok {
 			return fmt.Errorf("legacy source gateway does not support updates")
 		}
 		updated, updateErr := updater.UpdateManualKnowledge(ctx, binding.KnowledgeID, weknora.ManualKnowledgeInput{
 			Title: SourceTitle(doc.Title), Content: sourceContent, Status: "publish", Channel: "api",
-			ProcessConfig: &types.KnowledgeProcessOverrides{WikiEnabled: &wikiEnabled},
+			ProcessConfig: nativeKnowledgeProcessOverrides(),
 		})
 		if updateErr != nil {
 			return fmt.Errorf("update legacy source knowledge: %w", updateErr)

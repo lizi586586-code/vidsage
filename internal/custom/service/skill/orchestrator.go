@@ -63,7 +63,7 @@ func (o *Orchestrator) EnqueueContentPipeline(ctx context.Context, videoID strin
 		if err != nil {
 			return err
 		}
-		for _, jobType := range []string{JobGraph, JobOutline, JobSummary} {
+		for _, jobType := range []string{JobOutline, JobSummary} {
 			jobID, err := o.enqueueJob(ctx, tx, videoID, jobType)
 			if err != nil {
 				return fmt.Errorf("enqueue %s job: %w", jobType, err)

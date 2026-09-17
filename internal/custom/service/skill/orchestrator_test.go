@@ -46,7 +46,7 @@ func TestEnqueueContentPipelinePersistsCurrentTranscriptManifest(t *testing.T) {
 
 	var jobs []model.VideoProcessingJob
 	require.NoError(t, db.Where("video_id = ?", video.ID).Order("job_type ASC").Find(&jobs).Error)
-	require.Len(t, jobs, 3)
+	require.Len(t, jobs, 2)
 	firstIDs := make(map[string]string, len(jobs))
 	for _, job := range jobs {
 		firstIDs[job.JobType] = job.ID
@@ -61,7 +61,7 @@ func TestEnqueueContentPipelinePersistsCurrentTranscriptManifest(t *testing.T) {
 	require.NoError(t, orchestrator.EnqueueContentPipeline(t.Context(), video.ID))
 	jobs = nil
 	require.NoError(t, db.Where("video_id = ?", video.ID).Order("job_type ASC").Find(&jobs).Error)
-	require.Len(t, jobs, 3)
+	require.Len(t, jobs, 2)
 	for _, job := range jobs {
 		require.Equal(t, firstIDs[job.JobType], job.ID)
 	}

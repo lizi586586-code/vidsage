@@ -47,7 +47,6 @@ var retryableProcessingStages = map[string]bool{
 	"transcription":     true,
 	"subtitle_generate": true,
 	"index":             true,
-	"graph":             true,
 	"summary_enhance":   true,
 	"outline":           true,
 	"summary":           true,
@@ -144,16 +143,6 @@ func (h *ProcessingHandler) Retry(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported processing stage"})
 		return
 	}
-	if jobType == "graph" {
-		if err := h.ensureGraphTranscriptSource(c.Request.Context(), videoID); err != nil {
-			if errors.Is(err, errVideoOrProcessingStageNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "video or processing stage not found"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	}
 
 	var retried model.VideoProcessingJob
 	recreated := false
@@ -215,19 +204,9 @@ func (h *ProcessingHandler) Retry(c *gin.Context) {
 				}
 				updates["input_payload"] = inputPayload
 			}
-			if jobType == "graph" {
-				inputPayload, payloadErr := rebuildGraphInputPayload(tx, h.KBID, video)
-				if payloadErr != nil {
-					return payloadErr
-				}
-				updates["input_payload"] = inputPayload
-			}
 			if err := tx.Model(&retried).Updates(updates).Error; err != nil {
 				return err
 			}
-		}
-		if jobType == "graph" {
-			return nil
 		}
 		return tx.Model(&model.Video{}).Where("id = ?", videoID).Updates(map[string]any{
 			"status": model.VideoStatusProcessing, "processing_error_summary": "",

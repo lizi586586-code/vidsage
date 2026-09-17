@@ -128,7 +128,11 @@ func TestSourceWriterReusesSameGeneration(t *testing.T) {
 	}
 	require.NotNil(t, gateway.created[0].ProcessConfig)
 	require.NotNil(t, gateway.created[0].ProcessConfig.WikiEnabled)
-	require.False(t, *gateway.created[0].ProcessConfig.WikiEnabled)
+	require.True(t, *gateway.created[0].ProcessConfig.WikiEnabled)
+	require.NotNil(t, gateway.created[0].ProcessConfig.GraphEnabled)
+	require.True(t, *gateway.created[0].ProcessConfig.GraphEnabled)
+	require.NotNil(t, gateway.created[0].ProcessConfig.ExtractConfig)
+	require.True(t, gateway.created[0].ProcessConfig.ExtractConfig.Enabled)
 	require.Equal(t, "测试视频", gateway.created[0].Title)
 }
 

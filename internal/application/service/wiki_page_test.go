@@ -402,6 +402,60 @@ func nodeSlugs(data *types.WikiGraphData) map[string]bool {
 	return out
 }
 
+func TestComputeGraphSubset_ExcludesNativeWikiIndexPages(t *testing.T) {
+	pages := makeGraphFixture()
+	indexSlugs := []string{
+		"outline/video-1",
+		"typed-summary/video-1",
+		"transcript-page/video-1",
+	}
+	for _, slug := range indexSlugs {
+		pages[0].OutLinks = append(pages[0].OutLinks, slug)
+		pages = append(pages, &types.WikiPage{
+			Slug:     slug,
+			Title:    slug,
+			PageType: types.WikiPageTypeIndex,
+			InLinks:  types.StringArray{"hub"},
+			OutLinks: types.StringArray{"x"},
+		})
+	}
+
+	overview, err := computeGraphSubset(pages, &types.WikiGraphRequest{
+		Mode:  types.WikiGraphModeOverview,
+		Limit: 0,
+	})
+	if err != nil {
+		t.Fatalf("overview: %v", err)
+	}
+	if overview.Meta.Total != len(pages)-len(indexSlugs) {
+		t.Fatalf("overview total = %d, want %d", overview.Meta.Total, len(pages)-len(indexSlugs))
+	}
+	for _, slug := range indexSlugs {
+		if nodeSlugs(overview)[slug] {
+			t.Errorf("native Wiki index page %q appeared in overview graph", slug)
+		}
+	}
+
+	ego, err := computeGraphSubset(pages, &types.WikiGraphRequest{
+		Mode:   types.WikiGraphModeEgo,
+		Center: "hub",
+		Depth:  2,
+		Limit:  100,
+	})
+	if err != nil {
+		t.Fatalf("ego: %v", err)
+	}
+	egoSlugs := nodeSlugs(ego)
+	for _, slug := range indexSlugs {
+		if egoSlugs[slug] {
+			t.Errorf("native Wiki index page %q appeared in ego graph", slug)
+		}
+	}
+	if egoSlugs["x"] {
+		t.Error("ego graph traversed through an excluded native Wiki index page")
+	}
+}
+
 // TestComputeGraphSubset_OverviewTruncatesByLinkCount verifies that overview
 // mode returns the most-connected nodes first and reports truncation
 // honestly in Meta. At 4万 pages this is the path that must NOT return the

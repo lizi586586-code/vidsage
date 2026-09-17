@@ -4,6 +4,7 @@ import { getApiBaseUrl } from '@/utils/api-base'
 import type { ChatMessage, ChatSession, EvidenceLink, VideoData } from '@/types/videohub'
 import {
   displayQuestionFromStoredContent,
+  dedupeNativeAnswerEvents,
   mergeLocalTurnWithStoredMessages,
   parseWeKnoraStreamChunk,
   shouldAbortStream,
@@ -62,6 +63,9 @@ interface SendOptions {
   currentVideo?: VideoData
   currentTime?: number
   globalMode?: boolean
+  agentId?: string
+  agentEnabled?: boolean
+  agentSourceTenantId?: string | null
   onMessage?: (message: ChatMessage) => void
   onStreamMessage?: (message: StreamingChatMessage) => void
   onSessionCreated?: (session: ChatSession) => void
@@ -471,6 +475,10 @@ function finalizeNativeAgentStream(
       total_steps: events.filter(event => event.type !== 'answer').length,
     })
   }
+  const deduped = dedupeNativeAnswerEvents(events)
+  if (deduped !== events) {
+    events.splice(0, events.length, ...deduped)
+  }
 }
 
 function findLastAssistantAnswerIndex(messages: ChatMessage[]) {
@@ -508,7 +516,7 @@ async function streamAnswer(sessionID: string, question: string, scope: ScopeRes
     isAgentMode: Boolean(scope.agent_id) || agentEventStream.length > 0,
     is_completed: completed,
     request_id: sessionID,
-    agentEventStream: cloneAgentEventStream(agentEventStream),
+    agentEventStream: cloneAgentEventStream(completed ? dedupeNativeAnswerEvents(agentEventStream) : agentEventStream),
     thinkingText: thinkingText.trim(),
     activityText,
     timestamp: nowLabel(),
@@ -680,7 +688,12 @@ export async function createChatTurn(question: string, options: TurnOptions = {}
   try {
     const scope = await getScope(options)
     const tenantID = normalizeTenantId(options.session?.tenantId) || normalizeTenantId(scope.tenant_id)
-    const effectiveScope = tenantID && !scope.tenant_id ? { ...scope, tenant_id: tenantID } : scope
+    const effectiveScope = {
+      ...(tenantID && !scope.tenant_id ? { ...scope, tenant_id: tenantID } : scope),
+      ...(options.agentId ? { agent_id: options.agentId } : {}),
+      ...(options.agentEnabled !== undefined ? { agent_enabled: options.agentEnabled } : {}),
+      ...(options.agentSourceTenantId ? { agent_source_tenant_id: options.agentSourceTenantId } : {}),
+    }
     const session = options.session?.id && !options.session.id.startsWith('pending-')
       ? {
         id: options.session.id,

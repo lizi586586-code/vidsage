@@ -6359,5 +6359,13 @@ export default {
     capabilityRequired: 'Select at least one capability',
     loadFailed: 'Failed to load platform API keys',
     createFailed: 'Failed to create platform API key'
+  },
+  videohub: {
+    agentPicker: {
+      title: 'Agent',
+      quickAnswer: 'Quick Answer',
+      customAgent: 'Custom Reasoning',
+      fetchFailed: 'Agent info load failed, showing default name'
+    }
   }
 }

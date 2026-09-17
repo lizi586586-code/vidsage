@@ -446,8 +446,8 @@ export const useSettingsStore = defineStore("settings", {
       };
     },
     
-    // 选择智能体（sourceTenantId 仅在使用共享智能体时传入）
-    selectAgent(agentId: string, sourceTenantId?: string | null) {
+    // 选择智能体（sourceTenantId 仅在使用共享智能体时传入；agentMode 用于自定义智能体判定 quick-answer / smart-reasoning）
+    selectAgent(agentId: string, sourceTenantId?: string | null, agentMode?: string) {
       this.settings.selectedAgentId = agentId;
       this.settings.selectedAgentSourceTenantId = (sourceTenantId != null && sourceTenantId !== "") ? sourceTenantId : null;
       // 智能体配置只决定是否具备网络搜索能力，不替用户决定是否在本轮使用。
@@ -458,9 +458,14 @@ export const useSettingsStore = defineStore("settings", {
         this.settings.isAgentEnabled = false;
       } else if (agentId === BUILTIN_SMART_REASONING_ID) {
         this.settings.isAgentEnabled = true;
+      } else if (agentMode === 'smart-reasoning') {
+        // 自定义智能体：按其 agent_mode 判定
+        this.settings.isAgentEnabled = true;
+      } else if (agentMode === 'quick-answer') {
+        this.settings.isAgentEnabled = false;
       }
-      // 自定义智能体需要根据其配置来决定
-      
+      // 自定义智能体若未传 agentMode，保持当前 isAgentEnabled 不变
+
       // 切换智能体时重置知识库和文件选择状态
       // 因为不同智能体关联的知识库不同，需要清空用户之前的选择
       this.settings.selectedKnowledgeBases = [];

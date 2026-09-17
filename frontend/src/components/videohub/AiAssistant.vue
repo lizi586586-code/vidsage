@@ -22,6 +22,7 @@
         <div class="assistant-suggestions"><button v-for="item in suggestions" :key="item" type="button" @click="send(item)">{{ item }}</button></div>
       </section>
       <form class="assistant-bar" @submit.prevent="send(input)">
+        <VideohubAgentPicker />
         <input v-model="input" :disabled="isGenerating" :placeholder="globalMode ? '向 AI 提问知识库全部视频内容' : '向 AI 提问当前视频内容'" @focus="expanded = true" /><t-button type="submit" shape="circle" :disabled="isGenerating || !input.trim()"><t-icon name="send" /></t-button>
       </form>
     </div>
@@ -40,6 +41,8 @@ import { createChatTurn } from '@/api/videohub/chat'
 import type { StreamingChatMessage } from '@/api/videohub/chat'
 import type { ChatMessage, ChatSession, VideoData } from '@/types/videohub'
 import AgentStreamDisplay from '@/views/chat/components/AgentStreamDisplay.vue'
+import VideohubAgentPicker from '@/components/videohub/VideohubAgentPicker.vue'
+import { useSettingsStore } from '@/stores/settings'
 import { sanitizeMarkdownHTML } from '@/utils/security'
 import { configureMarkedForChatMarkdown, renderChatMarkdown } from '@/utils/chatMarkdownRenderer'
 
@@ -47,6 +50,7 @@ type TimestampPart = { text: string; seconds?: number; videoId?: string }
 
 const props = withDefaults(defineProps<{ currentVideo: VideoData; currentTime?: number; externalQuery?: string; globalMode?: boolean }>(), { currentTime: 0, externalQuery: '', globalMode: false })
 const emit = defineEmits<{ seek: [seconds: number]; navigate: [videoId: string, seconds: number] }>()
+const settingsStore = useSettingsStore()
 const expanded = ref(false), input = ref(''), isGenerating = ref(false), messageArea = ref<HTMLElement | null>(null)
 const messages = ref<StreamingChatMessage[]>([])
 const activeSession = ref<ChatSession | null>(null)
@@ -164,7 +168,17 @@ async function send(value: string) {
       Object.assign(target, message, { id: assistantId })
       void scrollBottom()
     }
-    const session = await createChatTurn(question, { currentVideo: props.currentVideo, currentTime: props.currentTime, globalMode: props.globalMode, session: activeSession.value || undefined, onSessionCreated: materializeActiveSession, onStreamMessage: updateStreamingMessage })
+    const session = await createChatTurn(question, {
+      currentVideo: props.currentVideo,
+      currentTime: props.currentTime,
+      globalMode: props.globalMode,
+      agentId: settingsStore.selectedAgentId,
+      agentEnabled: settingsStore.isAgentEnabled,
+      agentSourceTenantId: settingsStore.selectedAgentSourceTenantId,
+      session: activeSession.value || undefined,
+      onSessionCreated: materializeActiveSession,
+      onStreamMessage: updateStreamingMessage,
+    })
     activeSession.value = session
     cacheSession(session)
     messages.value = [welcome(props.currentVideo, props.globalMode), ...session.messages]

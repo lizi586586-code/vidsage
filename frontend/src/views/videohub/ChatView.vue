@@ -4,7 +4,7 @@
       <div class="chat-greeting"><span class="chat-avatar">AI</span><div><h1>Hi, Alice, 您可以向知识库提问</h1><p>从组织的视频知识中寻找答案与依据</p></div></div>
       <form class="chat-composer" @submit.prevent="startSession">
         <textarea v-model="question" rows="4" placeholder="输入你的问题，Enter 发送，Shift + Enter 换行" @keydown.enter.exact.prevent="startSession" />
-        <footer><div><t-button variant="text" shape="square" type="button" aria-label="添加附件"><t-icon name="attach" /></t-button><t-button variant="text" shape="square" type="button" aria-label="语音输入"><t-icon name="microphone" /></t-button></div><t-button type="submit" shape="circle" :disabled="!question.trim()"><t-icon name="send" /></t-button></footer>
+        <footer><div><VideohubAgentPicker /><t-button variant="text" shape="square" type="button" aria-label="添加附件"><t-icon name="attach" /></t-button><t-button variant="text" shape="square" type="button" aria-label="语音输入"><t-icon name="microphone" /></t-button></div><t-button type="submit" shape="circle" :disabled="!question.trim()"><t-icon name="send" /></t-button></footer>
       </form>
       <section class="recent"><h2>最近对话</h2><div v-if="loadingSessions" class="recent__state"><t-loading size="small" /></div><t-empty v-else-if="sessions.length === 0" description="暂无历史对话" />
         <button v-for="session in sessions" v-else :key="session.id" type="button" class="session-card" @click="openSession(session)">
@@ -35,6 +35,7 @@
         <div v-if="isGenerating && !streamingAssistantVisible" class="generating"><t-loading size="small" /> AI 正在整合视频知识回答中...</div>
       </div>
       <form class="conversation-composer" @submit.prevent="continueSession">
+        <VideohubAgentPicker />
         <textarea v-model="followUp" rows="2" placeholder="继续追问" :disabled="isGenerating" @keydown.enter.exact.prevent="continueSession" />
         <t-button type="submit" shape="circle" :disabled="isGenerating || !followUp.trim()"><t-icon name="send" /></t-button>
       </form>
@@ -50,8 +51,11 @@ import { createChatTurn, fetchSessions, loadChatSession } from '@/api/videohub/c
 import type { StreamingChatMessage } from '@/api/videohub/chat'
 import type { ChatMessage, ChatSession } from '@/types/videohub'
 import AgentStreamDisplay from '@/views/chat/components/AgentStreamDisplay.vue'
+import VideohubAgentPicker from '@/components/videohub/VideohubAgentPicker.vue'
+import { useSettingsStore } from '@/stores/settings'
 
 const router = useRouter()
+const settingsStore = useSettingsStore()
 const question = ref(''), followUp = ref(''), sessions = ref<ChatSession[]>([]), activeSession = ref<ChatSession | null>(null)
 const loadingSessions = ref(true), isGenerating = ref(false), copiedId = ref(''), messageArea = ref<HTMLElement | null>(null)
 const streamingAssistantId = ref('')
@@ -108,7 +112,14 @@ async function startSession() {
   const assistantId = pushStreamingPlaceholder(session)
   sessions.value.unshift(session); activeSession.value = session; isGenerating.value = true; await scrollBottom()
   try {
-    const created = await createChatTurn(value, { globalMode: true, onSessionCreated: createdSession => materializePendingSession(session, createdSession), onStreamMessage: message => updateStreamingMessage(assistantId, message) })
+    const created = await createChatTurn(value, {
+      globalMode: true,
+      agentId: settingsStore.selectedAgentId,
+      agentEnabled: settingsStore.isAgentEnabled,
+      agentSourceTenantId: settingsStore.selectedAgentSourceTenantId,
+      onSessionCreated: createdSession => materializePendingSession(session, createdSession),
+      onStreamMessage: message => updateStreamingMessage(assistantId, message),
+    })
     sessions.value = sessions.value.map(item => item.id === session.id || item.id === created.id ? created : item)
     activeSession.value = created
   } catch (error) {
@@ -124,7 +135,15 @@ async function continueSession() {
   const assistantId = pushStreamingPlaceholder(target)
   isGenerating.value = true; await scrollBottom()
   try {
-    const updated = await createChatTurn(value, { globalMode: target.scope !== 'video', currentVideo: target.videoId ? { id: target.videoId, title: target.videoTitle || '指定视频', category: 'general', categoryName: '通用分享', duration: '', durationSeconds: 0, created_at: '', video_url: '', poster_url: target.videoCoverUrl, overview: '', chapters: [], subtitles: [] } : undefined, session: target, onStreamMessage: message => updateStreamingMessage(assistantId, message) })
+    const updated = await createChatTurn(value, {
+      globalMode: target.scope !== 'video',
+      agentId: settingsStore.selectedAgentId,
+      agentEnabled: settingsStore.isAgentEnabled,
+      agentSourceTenantId: settingsStore.selectedAgentSourceTenantId,
+      currentVideo: target.videoId ? { id: target.videoId, title: target.videoTitle || '指定视频', category: 'general', categoryName: '通用分享', duration: '', durationSeconds: 0, created_at: '', video_url: '', poster_url: target.videoCoverUrl, overview: '', chapters: [], subtitles: [] } : undefined,
+      session: target,
+      onStreamMessage: message => updateStreamingMessage(assistantId, message),
+    })
     activeSession.value = updated
     sessions.value = [updated, ...sessions.value.filter(item => item.id !== updated.id)]
   } catch (error) {

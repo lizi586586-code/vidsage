@@ -6361,5 +6361,13 @@ export default {
     myChats: '我的对话',
     apiChats: 'API 会话',
     noSessions: '暂无对话'
+  },
+  videohub: {
+    agentPicker: {
+      title: '智能体',
+      quickAnswer: '快速问答',
+      customAgent: '自定义推理',
+      fetchFailed: '智能体信息加载失败，已显示默认名称'
+    }
   }
 }

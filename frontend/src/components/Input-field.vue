@@ -890,6 +890,13 @@ const enabledAgents = computed(() =>
   agents.value.filter(a => !disabledOwnAgentIds.value.includes(a.id))
 );
 
+// vidsage 二开：视频场景仅允许选择 builtin-quick-answer 与指定自定义智能体
+const CUSTOM_AGENT_ID = '6f3691c2-8d15-48f8-b1f4-dfadd222ca53';
+const allowedAgentIds = [BUILTIN_QUICK_ANSWER_ID, CUSTOM_AGENT_ID];
+const allowedAgents = computed(() =>
+  enabledAgents.value.filter(a => allowedAgentIds.includes(a.id))
+);
+
 // LAST_CHAT_MODEL_KEY scopes the per-user "last selected chat model"
 // to localStorage. The previous implementation wrote this back to the
 // tenant-level KV /tenants/kv/conversation-config — which (a) required
@@ -2553,7 +2560,7 @@ defineExpose({
 
           <!-- Agent 选择器下拉菜单 -->
           <AgentSelector :visible="showAgentModeSelector" :anchorEl="agentModeButtonRef"
-            :currentAgentId="selectedAgentId" :agents="enabledAgents" :all-models="allModels"
+            :currentAgentId="selectedAgentId" :agents="allowedAgents" :all-models="allModels"
             @close="closeAgentModeSelector" @select="handleSelectAgent" @not-ready="handleAgentNotReady" />
 
           <!-- WebSearch 开关按钮（智能体未启用时不显示） -->

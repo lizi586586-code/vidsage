@@ -3,6 +3,8 @@ export type ChatScope = 'global' | 'video'
 export interface ChatRequestScope {
   scope: ChatScope
   agent_id?: string
+  agent_enabled?: boolean
+  agent_source_tenant_id?: string
   knowledge_base_ids: string[]
   knowledge_ids: string[]
   tenant_id?: string | number
@@ -31,8 +33,9 @@ export function buildChatRequest(
       // Keep both wiki source_refs and transcript fallback scoped to the
       // current video's active transcript generation.
       ...(scope.scope === 'video' || !scope.agent_id ? { knowledge_ids: scope.knowledge_ids } : {}),
-      agent_enabled: Boolean(scope.agent_id),
+      agent_enabled: scope.agent_enabled ?? Boolean(scope.agent_id),
       ...(scope.agent_id ? { agent_id: scope.agent_id } : {}),
+      ...(scope.agent_source_tenant_id ? { agent_source_tenant_id: scope.agent_source_tenant_id } : {}),
       disable_title: true,
       channel: 'web',
     },

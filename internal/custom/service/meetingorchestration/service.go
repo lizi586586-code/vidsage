@@ -71,7 +71,20 @@ func (s *Service) Start(ctx context.Context) (model.MeetingOrchestrationJob, err
 	defer s.mu.Unlock()
 	var active model.MeetingOrchestrationJob
 	if err := s.DB.WithContext(ctx).Where("owner_scope_id = ? AND status IN ?", s.OwnerScopeID, []string{JobQueued, JobRunning}).Order("created_at DESC").First(&active).Error; err == nil {
-		return active, nil
+		_, ownedByProcess := s.running[active.ID]
+		if ownedByProcess && !isStaleMeetingJob(active, time.Now().UTC(), s.meetingJobTimeout()) {
+			return active, nil
+		}
+		finishedAt := time.Now().UTC()
+		if updateErr := s.DB.WithContext(ctx).Model(&model.MeetingOrchestrationJob{}).Where("id = ? AND owner_scope_id = ? AND status IN ?", active.ID, s.OwnerScopeID, []string{JobQueued, JobRunning}).Updates(map[string]any{
+			"status":        JobFailed,
+			"error_code":    "model_timeout",
+			"error_message": safeMeetingErrorMessage("model_timeout"),
+			"finished_at":   finishedAt,
+			"updated_at":    finishedAt,
+		}).Error; updateErr != nil {
+			return model.MeetingOrchestrationJob{}, updateErr
+		}
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return model.MeetingOrchestrationJob{}, err
 	}
@@ -85,6 +98,30 @@ func (s *Service) Start(ctx context.Context) (model.MeetingOrchestrationJob, err
 	s.running[job.ID] = struct{}{}
 	go s.run(job.ID)
 	return job, nil
+}
+
+func (s *Service) meetingJobTimeout() time.Duration {
+	if s != nil && s.RunTimeout > 0 {
+		return s.RunTimeout
+	}
+	return 20 * time.Minute
+}
+
+func isStaleMeetingJob(job model.MeetingOrchestrationJob, now time.Time, timeout time.Duration) bool {
+	if timeout <= 0 {
+		return false
+	}
+	lastActivity := job.UpdatedAt
+	if job.StartedAt != nil && job.StartedAt.After(lastActivity) {
+		lastActivity = *job.StartedAt
+	}
+	if lastActivity.IsZero() {
+		lastActivity = job.CreatedAt
+	}
+	if lastActivity.IsZero() || now.Before(lastActivity) {
+		return false
+	}
+	return now.Sub(lastActivity) > timeout
 }
 
 func (s *Service) GetJob(ctx context.Context, id string) (model.MeetingOrchestrationJob, error) {
@@ -132,10 +169,7 @@ func (s *Service) GetCurrent(ctx context.Context) (*Projection, *model.MeetingOr
 
 func (s *Service) run(id string) {
 	defer func() { s.mu.Lock(); delete(s.running, id); s.mu.Unlock() }()
-	timeout := s.RunTimeout
-	if timeout <= 0 {
-		timeout = 20 * time.Minute
-	}
+	timeout := s.meetingJobTimeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	now := time.Now().UTC()

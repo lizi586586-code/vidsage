@@ -75,7 +75,6 @@ func main() {
 	var knowledgeWeKnoraCli *weknora.Client
 	var wikiClient *weknora.WikiClient
 	var trainingWikiClient *weknora.WikiClient
-	var agentClient *weknora.AgentClient
 	if kbRoutingErr != nil {
 		// Do not construct empty/ambiguous clients. The routing error is fed
 		// into worker gating below and the HTTP router exposes only the
@@ -92,7 +91,6 @@ func main() {
 			trainingOutputKBID = roles.Knowledge
 		}
 		trainingWikiClient = weknora.NewWikiClient(cfg.WeKnora.ForKnowledgeBase(trainingOutputKBID))
-		agentClient = weknora.NewAgentClient(knowledgeWeKnoraCfg)
 	}
 	llmCli := llm.NewClient(cfg.LLM)
 	tongyiCli := tongyi.New(cfg.Tongyi)
@@ -105,23 +103,10 @@ func main() {
 			slog.Warn("tencent mps client unavailable", "error", err)
 		}
 	}
+	// Native WeKnora Wiki/Graph is enabled on the knowledge-layer KB. The
+	// product-specific five-type graph projection is intentionally disabled
+	// on this branch, so no custom Neo4j store is constructed or rebuilt.
 	var wikiGraph knowledgegraph.Store
-	if kbRoutingErr == nil {
-		var graphErr error
-		wikiGraph, graphErr = knowledgegraph.New(cfg.WikiGraph, wikiClient, db)
-		if graphErr != nil {
-			slog.Warn("wiki graph projection unavailable", "error", graphErr)
-		} else if wikiGraph != nil {
-			defer wikiGraph.Close(context.Background())
-			rebuildCtx, cancelRebuild := context.WithTimeout(context.Background(), 2*time.Minute)
-			if rebuildErr := wikiGraph.ProjectKnowledgeBase(rebuildCtx); rebuildErr != nil {
-				slog.Warn("knowledge Wiki graph startup rebuild failed", "error", rebuildErr)
-			} else {
-				slog.Info("knowledge Wiki graph startup rebuild completed", "knowledge_base_id", roles.Knowledge)
-			}
-			cancelRebuild()
-		}
-	}
 	// 内容生产 skill 编排器（CP-T005 / CP-T006）
 	orchestrator := skill.NewOrchestrator(db, wikiClient, roles.Knowledge)
 
@@ -170,22 +155,8 @@ func main() {
 				"missing_config", []string{"CUSTOM_LLM_BASE_URL", "CUSTOM_LLM_API_KEY", "CUSTOM_LLM_MODEL"})
 		}
 
-		base := worker.BaseSkillHandler{
-			DB:              db,
-			AgentClient:     agentClient,
-			SourceReader:    knowledgeWeKnoraCli,
-			SourceWriter:    transcriptservice.NewSourceWriter(db, knowledgeWeKnoraCli),
-			Orchestrator:    orchestrator,
-			AgentID:         contentAgentID,
-			KnowledgeBaseID: roles.Knowledge,
-		}
-
 		handlers := []worker.Handler{
 			worker.NewThumbnailHandler(db, minioCli, contentWorkersEnabled, cfg.TranscriptionProvider),
-			// Graph reconciliation operates on the existing transcript and Wiki
-			// pages; it must remain available when transcription credentials are
-			// absent in the local acceptance environment.
-			&worker.GraphHandler{BaseSkillHandler: base, Graph: wikiGraph},
 		}
 		if contentWorkersEnabled {
 			transcriptionHandler := worker.NewTranscriptionHandler(db, tongyiCli, cfg.Tongyi.InternalFrontendBaseURL)

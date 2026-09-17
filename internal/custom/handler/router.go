@@ -62,7 +62,8 @@ func NewRouter(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	deps.KnowledgeWeKnora = weknora.New(cfg.WeKnora.ForKnowledgeBase(roles.Knowledge))
 	deps.WeKnora = deps.EvidenceWeKnora
 	deps.Wiki = weknora.NewWikiClient(cfg.WeKnora.ForKnowledgeBase(roles.Knowledge))
-	deps.Graph, _ = knowledgegraph.New(cfg.WikiGraph, deps.Wiki)
+	// The native WeKnora Wiki/Graph path is used on this branch. Do not
+	// construct the product-specific five-type graph projection.
 	return buildRouter(deps)
 }
 

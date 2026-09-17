@@ -581,7 +581,8 @@ func (s *wikiPageService) GetIndexView(
 //
 // `Types` is an optional page_type allow-list applied to both the candidate
 // node set and (in ego mode) the frontier expansion. Leaving it empty means
-// no type filter.
+// no type filter. Index pages are always excluded because they are Wiki
+// system pages, not graph content nodes.
 //
 // `Limit <= 0` disables the cap entirely and is reserved for internal
 // callers like the lint service that need to walk every page. The HTTP
@@ -647,8 +648,12 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 		if req.Center == "" {
 			return nil, errors.New("ego graph requires a center slug")
 		}
-		if _, ok := pageBySlug[req.Center]; !ok {
+		centerPage, ok := pageBySlug[req.Center]
+		if !ok {
 			return nil, fmt.Errorf("ego center slug %q not found", req.Center)
+		}
+		if centerPage.PageType == types.WikiPageTypeIndex {
+			return nil, fmt.Errorf("ego center slug %q is not a graph page", req.Center)
 		}
 		depth := req.Depth
 		if depth < 1 {
@@ -659,6 +664,9 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 		// overview: keep only type-allowed candidates, sort by link_count desc, cap.
 		candidates := make([]*types.WikiPage, 0, len(pages))
 		for _, p := range pages {
+			if p.PageType == types.WikiPageTypeIndex {
+				continue
+			}
 			if hasTypeFilter && !typeAllow[p.PageType] {
 				continue
 			}
@@ -724,14 +732,15 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 	// whole graph. For overview this respects the type filter; for ego
 	// it is the total KB page count (the user still sees "X of Y" based
 	// on the full wiki, not a filtered denominator).
-	total := len(pages)
-	if mode == types.WikiGraphModeOverview && hasTypeFilter {
-		total = 0
-		for _, p := range pages {
-			if typeAllow[p.PageType] {
-				total++
-			}
+	total := 0
+	for _, p := range pages {
+		if p.PageType == types.WikiPageTypeIndex {
+			continue
 		}
+		if mode == types.WikiGraphModeOverview && hasTypeFilter && !typeAllow[p.PageType] {
+			continue
+		}
+		total++
 	}
 
 	meta := types.WikiGraphMeta{
@@ -762,9 +771,9 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 
 // bfsEgoSlugs computes the undirected BFS neighborhood of `center` up to
 // `depth` hops using both inbound and outbound links. Type-filtered pages
-// are excluded from the result but are also NOT traversed through — so a
-// filter that hides "index" pages will not leak the whole wiki via the
-// index. The caller guarantees center exists in pageBySlug.
+// are excluded from the result but are also NOT traversed through. Index
+// pages are always excluded because they are Wiki system pages. The caller
+// guarantees center exists and is not an index page.
 func bfsEgoSlugs(
 	pageBySlug map[string]*types.WikiPage,
 	center string,
@@ -775,6 +784,9 @@ func bfsEgoSlugs(
 	hasTypeFilter := len(typeAllow) > 0
 	centerPage, ok := pageBySlug[center]
 	if !ok {
+		return map[string]struct{}{}
+	}
+	if centerPage.PageType == types.WikiPageTypeIndex {
 		return map[string]struct{}{}
 	}
 	// If the center itself fails the type filter we honor the filter and
@@ -805,6 +817,9 @@ func bfsEgoSlugs(
 				}
 				np, exists := pageBySlug[nb]
 				if !exists {
+					continue
+				}
+				if np.PageType == types.WikiPageTypeIndex {
 					continue
 				}
 				if hasTypeFilter && !typeAllow[np.PageType] {

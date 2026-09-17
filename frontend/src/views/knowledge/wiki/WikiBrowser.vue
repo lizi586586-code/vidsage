@@ -1004,7 +1004,7 @@ const graphReady = ref(false)
 const showArrows = ref(true)
 
 // Graph filtering
-const graphFilterTypes = ref<Set<string>>(new Set(['summary', 'entity', 'concept', 'synthesis', 'comparison', 'index']))
+const graphFilterTypes = ref<Set<string>>(new Set(['summary', 'entity', 'concept', 'synthesis', 'comparison']))
 
 // Graph slicing state. The backend caps an overview fetch at 500 nodes —
 // tens-of-thousands-page wikis would otherwise crash the browser trying to
@@ -1166,9 +1166,7 @@ const typeOrder = ['summary', 'entity', 'concept', 'synthesis', 'comparison']
 // the individual page types by icon instead. Summary keeps its own tab and is
 // shown after the knowledge tab.
 const KNOWLEDGE_TAB = 'knowledge'
-// P4 object pages use native page_type=index, so the merged knowledge request
-// must include index and then remove ordinary system index rows in the client.
-const KNOWLEDGE_TYPES = ['entity', 'concept', 'synthesis', 'comparison', 'index']
+const KNOWLEDGE_TYPES = ['entity', 'concept', 'synthesis', 'comparison']
 const KNOWLEDGE_NATIVE_TYPES = ['entity', 'concept', 'synthesis', 'comparison']
 // CONTENT_TABS are the sidebar tabs in display order: the merged knowledge tab
 // first, then summary. Each tab maps to its own bucket keyed by the tab id.
@@ -3186,7 +3184,7 @@ async function refreshSelectedPage() {
 // there (empty == no filter == return everything, the opposite of what
 // the user meant).
 function graphFilterTypesToArray(): string[] | undefined {
-  const all = ['summary', 'entity', 'concept', 'synthesis', 'comparison', 'index']
+  const all = ['summary', 'entity', 'concept', 'synthesis', 'comparison']
   if (all.every(t => graphFilterTypes.value.has(t))) {
     return undefined
   }
@@ -3217,7 +3215,7 @@ async function loadGraph() {
       limit: GRAPH_OVERVIEW_LIMIT,
       types: graphFilterTypesToArray(),
     })
-    graphData.value = (res as any).data || res as any
+    graphData.value = filterIndexNodes((res as any).data || res as any)
     // Seed the search dropdown's empty-state with this overview snapshot
     // so opening the select without typing shows the top-500 by link_count
     // — matching what the old client-filter dropdown used to surface.
@@ -3270,7 +3268,7 @@ async function loadEgoGraph(slug: string, depth = GRAPH_EGO_DEFAULT_DEPTH) {
       limit: GRAPH_EGO_LIMIT,
       types: graphFilterTypesToArray(),
     })
-    graphData.value = (res as any).data || res as any
+    graphData.value = filterIndexNodes((res as any).data || res as any)
     graphMode.value = 'ego'
     graphCenter.value = slug
     // Entering (or re-entering) a fresh ego view resets the bloom
@@ -3339,7 +3337,7 @@ async function loadBloomNeighbors(anchorSlug: string, depth = GRAPH_EGO_DEFAULT_
       limit: GRAPH_EGO_LIMIT,
       types: graphFilterTypesToArray(),
     })
-    const incoming = (res as any).data || res as any
+    const incoming = filterIndexNodes((res as any).data || res as any)
     if (!incoming || !Array.isArray(incoming.nodes)) return
 
     bloomCurrentGeneration += 1
@@ -3362,6 +3360,24 @@ async function loadBloomNeighbors(anchorSlug: string, depth = GRAPH_EGO_DEFAULT_
     console.error(`Failed to bloom neighbors for ${anchorSlug}:`, e)
   } finally {
     graphLoading.value = false
+  }
+}
+
+// filterIndexNodes strips page_type=index nodes and edges referencing them
+// from a WikiGraphData payload. The WeKnora-app image used in acceptance
+// runs pre-built upstream code that doesn't exclude index pages from the
+// graph API, so we filter client-side to keep the canvas clean.
+function filterIndexNodes(data: WikiGraphData): WikiGraphData {
+  if (!data?.nodes?.length) return data
+  const allowed = new Set<string>()
+  for (const n of data.nodes) {
+    if (n.page_type !== 'index') allowed.add(n.slug)
+  }
+  if (allowed.size === data.nodes.length) return data
+  return {
+    nodes: data.nodes.filter((n) => allowed.has(n.slug)),
+    edges: data.edges.filter((e) => allowed.has(e.source) && allowed.has(e.target)),
+    meta: { ...data.meta, returned: allowed.size },
   }
 }
 
@@ -3530,7 +3546,7 @@ async function growFrontier() {
             limit: GRAPH_EGO_LIMIT,
             types: graphFilterTypesToArray(),
           })
-          const data = (res as any).data || res as any
+          const data = filterIndexNodes((res as any).data || res as any)
           if (data?.nodes) responses.push(data)
         } catch (e) {
           console.error(`growFrontier: ego fetch failed for ${slug}:`, e)
@@ -3709,7 +3725,7 @@ async function doSearch() {
   try {
     const res = await searchWikiPages(props.knowledgeBaseId, searchQuery.value)
     const rawHits: WikiPage[] = (res as any).data?.pages || (res as any).pages || []
-    const hits = rawHits.filter(isVisibleWikiContentPage)
+    const hits = rawHits.filter((page) => page.page_type !== 'index')
     searchResults.value = hits
     // Also seed `pages.value` with hits so slugDisplayName / navigation
     // heuristics keep resolving titles correctly without re-fetching.
@@ -4746,7 +4762,8 @@ async function handleGraphRemoteSearch(keyword: string) {
     try {
       const res = await searchWikiPages(props.knowledgeBaseId, q, 20)
       if (seq !== graphSearchSeq) return
-      const pages: WikiPage[] = (res as any)?.data?.pages || (res as any)?.pages || []
+      const pages: WikiPage[] = ((res as any)?.data?.pages || (res as any)?.pages || [])
+        .filter((page: WikiPage) => page.page_type !== 'index')
       graphSearchOptions.value = pages.map(p => ({ label: p.title, value: p.slug }))
     } catch (e) {
       if (seq !== graphSearchSeq) return
@@ -4844,7 +4861,8 @@ async function handleGraphSearchEnter(context: { inputValue: string }) {
   // somewhere useful rather than silently doing nothing.
   try {
     const res = await searchWikiPages(props.knowledgeBaseId, value, 1)
-    const pages: WikiPage[] = (res as any)?.data?.pages || (res as any)?.pages || []
+    const pages: WikiPage[] = ((res as any)?.data?.pages || (res as any)?.pages || [])
+      .filter((page: WikiPage) => page.page_type !== 'index')
     if (pages.length > 0) {
       handleGraphSearchSelect(pages[0].slug)
     }

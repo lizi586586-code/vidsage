@@ -4,6 +4,7 @@ import { buildChatRequest, normalizeChatError } from './chatRequest'
 import { appendSelectedTenantHeader } from '../../utils/tenantHeaders'
 import {
   displayQuestionFromStoredContent,
+  dedupeNativeAnswerEvents,
   mergeLocalTurnWithStoredMessages,
   parseWeKnoraStreamChunk,
   shouldAbortStream,
@@ -32,6 +33,21 @@ test('keeps previous rounds and appends the current local round when stored hist
   )
 
   assert.deepEqual(merged.map(message => message.text), ['第一问', '第一答', '第二问', '第二答'])
+})
+
+test('deduplicates repeated native answer events emitted at stream completion', () => {
+  const events = dedupeNativeAnswerEvents([
+    { type: 'tool_call', tool_name: 'search_knowledge' },
+    { type: 'answer', event_id: 'stream-answer', content: 'AI 会受上下文窗口限制而失忆。', done: false },
+    { type: 'answer', event_id: 'terminal-answer', content: 'AI 会受上下文窗口限制而失忆。', done: true },
+    { type: 'agent_complete' },
+  ])
+
+  assert.deepEqual(events, [
+    { type: 'tool_call', tool_name: 'search_knowledge' },
+    { type: 'answer', event_id: 'terminal-answer', content: 'AI 会受上下文窗口限制而失忆。', done: true },
+    { type: 'agent_complete' },
+  ])
 })
 
 test('appends the streamed assistant answer after the stored current user message', () => {

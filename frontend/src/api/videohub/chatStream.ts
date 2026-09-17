@@ -19,6 +19,22 @@ export interface MergeableChatMessage {
   timestamp: string
 }
 
+/**
+ * Agent backends may emit a streamed answer and then repeat the same answer
+ * in the terminal event with a different event id. The UI renders every
+ * answer event, so retain only the final answer for a completed turn.
+ */
+export function dedupeNativeAnswerEvents(events: Record<string, unknown>[]) {
+  const answerIndexes = events
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.type === 'answer' && String(event.content || '').trim())
+  if (answerIndexes.length < 2) return events
+
+  const completed = answerIndexes.filter(({ event }) => event.done === true)
+  const keepIndex = (completed[completed.length - 1] || answerIndexes[answerIndexes.length - 1]).index
+  return events.filter((event, index) => event.type !== 'answer' || index === keepIndex)
+}
+
 export function displayQuestionFromStoredContent(content: string) {
   const marker = '用户问题：'
   const index = content.lastIndexOf(marker)
@@ -41,23 +57,37 @@ export function mergeLocalTurnWithStoredMessages<T extends MergeableChatMessage>
     }
   }
   if (currentUserIndex < 0) {
+    // 没有匹配的 user message
+    const hasStoredUser = finalMessages.some(m => m.sender === 'user')
+    if (!hasStoredUser) {
+      // stored 没有 user message，移除所有 stored assistant（它们是当前问题的重复回答）
+      for (let i = finalMessages.length - 1; i >= 0; i -= 1) {
+        if (finalMessages[i].sender === 'assistant') {
+          finalMessages.splice(i, 1)
+        }
+      }
+    }
     finalMessages.push(localUserMessage)
     currentUserIndex = finalMessages.length - 1
   }
 
-  const assistantIndex = finalMessages.findIndex((message, index) =>
-    index > currentUserIndex && message.sender === 'assistant' && message.text.trim(),
-  )
-  if (assistantIndex >= 0) {
-    finalMessages[assistantIndex] = {
-      ...finalMessages[assistantIndex],
-      ...localAssistantMessage,
-      id: finalMessages[assistantIndex].id,
-      timestamp: finalMessages[assistantIndex].timestamp,
+  // 移除当前 user message 之后所有 assistant message（空占位 / 重复），只保留第一条非空的 id/timestamp
+  let preservedAssistant: T | null = null
+  for (let i = finalMessages.length - 1; i > currentUserIndex; i -= 1) {
+    const m = finalMessages[i]
+    if (m.sender === 'assistant') {
+      if (!preservedAssistant && m.text.trim()) {
+        preservedAssistant = m
+      }
+      finalMessages.splice(i, 1)
     }
+  }
+  if (preservedAssistant) {
+    finalMessages.push({ ...localAssistantMessage, id: preservedAssistant.id, timestamp: preservedAssistant.timestamp })
   } else {
     finalMessages.push(localAssistantMessage)
   }
+
   return finalMessages
 }
 

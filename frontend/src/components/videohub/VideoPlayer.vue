@@ -48,6 +48,7 @@ const playbackRate = ref(1)
 const speedMenuOpen = ref(false)
 const subtitlesEnabled = ref(true)
 const hasError = ref(false)
+const pendingSeekSeconds = ref<number | null>(null)
 const rates = [0.5, 0.75, 1, 1.25, 1.5, 2]
 const activeSubtitle = computed(() => props.subtitles.find(cue => currentSeconds.value >= cue.start_seconds && currentSeconds.value < cue.end_seconds))
 const progressPercent = computed(() => {
@@ -63,13 +64,25 @@ function clamp(seconds: number) {
 function seekTo(seconds: number) {
   const next = clamp(seconds)
   currentSeconds.value = next
-  if (video.value) video.value.currentTime = next
+  if (video.value && video.value.readyState >= 1) {
+    video.value.currentTime = next
+    pendingSeekSeconds.value = null
+  } else {
+    pendingSeekSeconds.value = next
+  }
   emit('timeupdate', next)
 }
 
 function onLoaded() {
   duration.value = Number.isFinite(video.value?.duration) ? video.value?.duration || 0 : props.durationHint
   hasError.value = false
+  if (pendingSeekSeconds.value !== null && video.value) {
+    const next = clamp(pendingSeekSeconds.value)
+    video.value.currentTime = next
+    currentSeconds.value = next
+    pendingSeekSeconds.value = null
+    emit('timeupdate', next)
+  }
 }
 
 function onTimeUpdate() {

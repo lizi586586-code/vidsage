@@ -341,8 +341,9 @@ type MenuItem = { title: string; icon: string; path: string; childrenPath?: stri
 const { menuArr, visibleMenuArr } = storeToRefs(usemenuStore);
 let activeSubmenu = ref<string>('');
 const isLiteEdition = ref(false);
-// Batch 1 keeps Chat as a placeholder and intentionally hides session history.
-const showChatHistory = false;
+// Chat history is part of the platform shell so the chat landing page and
+// conversation detail share one consistent navigation surface.
+const showChatHistory = true;
 
 // 批量管理状态
 const batchMode = ref(false)
@@ -480,15 +481,20 @@ const dateBucketLabels = computed<Record<DateBucketKey, string>>(() => ({
 const filteredGroupedSessions = computed(() => {
     const bucket = activeBucket.value;
     if (!bucket?.items.length) return [];
-    return groupSessionsByDate(
+    const groups = groupSessionsByDate(
         bucket.items.map((item) => ({
             ...item,
-            path: `chat/${item.id}`,
+            path: item.path || `chat/${item.id}`,
             title: item.title || '',
         })),
         dateBucketLabels.value,
         (session) => classifyDateBucket(session.updated_at || session.created_at),
     );
+    return groups as Array<{
+        key: string;
+        label: string;
+        items: Array<SessionForGrouping & { path: string; title: string }>;
+    }>;
 });
 
 const refreshSessionListScrollability = async () => {
@@ -694,7 +700,9 @@ const debounce = (fn: (...args: any[]) => void, delay: number) => {
 }
 const mapSessionRow = (item: any) => ({
     title: item.title ? item.title : t('menu.newSession'),
-    path: `chat/${item.id}`,
+    path: String(item.description || '').startsWith('videohub:')
+        ? `ai-chat?session=${encodeURIComponent(item.id)}`
+        : `chat/${item.id}`,
     id: item.id,
     isMore: false,
     isNoTitle: item.title ? false : true,
@@ -716,15 +724,20 @@ const syncMenuStoreFromBuckets = () => {
 
 const menuChildToSessionRow = (item: Record<string, unknown>): SessionForGrouping & { path: string } => {
     const id = String(item.id);
+    const description = typeof item.description === 'string' ? item.description : '';
     return {
         id,
-        path: typeof item.path === 'string' ? item.path : `chat/${id}`,
+        path: typeof item.path === 'string'
+            ? item.path
+            : description.startsWith('videohub:')
+                ? `ai-chat?session=${encodeURIComponent(id)}`
+                : `chat/${id}`,
         title: typeof item.title === 'string' ? item.title : undefined,
         is_pinned: !!item.is_pinned,
         created_at: typeof item.created_at === 'string' ? item.created_at : undefined,
         updated_at: typeof item.updated_at === 'string' ? item.updated_at : undefined,
         im_platform: typeof item.im_platform === 'string' ? item.im_platform : '',
-        description: typeof item.description === 'string' ? item.description : '',
+        description,
         user_id: typeof item.user_id === 'string' ? item.user_id : '',
     };
 };
@@ -978,14 +991,23 @@ const handleSessionMutation = (event: Event) => {
     }
 };
 
+const handleSessionRefresh = () => {
+    if (showChatHistory) {
+        void getMessageList();
+    }
+};
+
 onMounted(async () => {
     const routeName = typeof route.name === 'string' ? route.name : (route.name ? String(route.name) : '')
     currentpath.value = routeName;
     if (route.params.chatid) {
         currentSecondpath.value = `chat/${route.params.chatid}`;
+    } else if (route.name === 'aiChat' && route.query.session) {
+        currentSecondpath.value = `ai-chat?session=${encodeURIComponent(String(route.query.session))}`;
     }
 
     window.addEventListener(SESSION_MUTATION_EVENT, handleSessionMutation);
+    window.addEventListener('weknora:session-refresh', handleSessionRefresh);
 
     isLiteEdition.value = authStore.isLiteMode
     getSystemInfo().then(res => {
@@ -1014,13 +1036,16 @@ onMounted(async () => {
 
 onUnmounted(() => {
     window.removeEventListener(SESSION_MUTATION_EVENT, handleSessionMutation);
+    window.removeEventListener('weknora:session-refresh', handleSessionRefresh);
 });
 
-watch([() => route.name, () => route.params], (newvalue, oldvalue) => {
+watch([() => route.name, () => route.params, () => route.query.session], (newvalue, oldvalue) => {
     const nameStr = typeof newvalue[0] === 'string' ? (newvalue[0] as string) : (newvalue[0] ? String(newvalue[0]) : '')
     currentpath.value = nameStr;
     if (newvalue[1].chatid) {
         currentSecondpath.value = `chat/${newvalue[1].chatid}`;
+    } else if (nameStr === 'aiChat' && newvalue[2]) {
+        currentSecondpath.value = `ai-chat?session=${encodeURIComponent(String(newvalue[2]))}`;
     } else {
         currentSecondpath.value = "";
     }

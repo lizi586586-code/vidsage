@@ -15,6 +15,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/modelcontext"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 const (
@@ -186,6 +187,8 @@ type responseVerdict struct {
 	isDone       bool
 	finalAnswer  string
 	emptyContent bool // LLM returned stop with no tool calls and empty content
+	contract     videoevidence.AnswerContract
+	contractErr  error
 	step         types.AgentStep
 }
 
@@ -268,6 +271,26 @@ func (e *AgentEngine) analyzeResponse(
 			"round":      iteration + 1,
 			"answer_len": len(response.Content),
 		})
+		answer := response.Content
+		var parsedContract videoevidence.AnswerContract
+		if e.config != nil && e.config.AnswerContractEnabled {
+			contract, err := videoevidence.ParseAnswerContract(answer)
+			if err != nil {
+				logger.Errorf(ctx, "[Agent][Round-%d] Answer contract validation failed: %v", iteration+1, err)
+				return responseVerdict{isDone: true, contractErr: err, step: step}
+			}
+			parsedContract = contract
+			answer = videoevidence.RenderAnswerContract(contract)
+			answer = e.modelContext.DecodeOutputText(answer)
+			step.Thought = ""
+			return responseVerdict{
+				isDone:       true,
+				finalAnswer:  answer,
+				emptyContent: strings.TrimSpace(answer) == "",
+				contract:     parsedContract,
+				step:         step,
+			}
+		}
 
 		// Emit the final answer. The answer text reaches the UI by one of two
 		// paths:
@@ -285,13 +308,13 @@ func (e *AgentEngine) analyzeResponse(
 			answerID = response.AnswerEventID
 		} else {
 			answerID = generateEventID("answer")
-			if response.Content != "" {
+			if answer != "" {
 				e.eventBus.Emit(ctx, event.Event{
 					ID:        answerID,
 					Type:      event.EventAgentFinalAnswer,
 					SessionID: sessionID,
 					Data: event.AgentFinalAnswerData{
-						Content: response.Content,
+						Content: answer,
 						Done:    false,
 					},
 				})
@@ -309,8 +332,9 @@ func (e *AgentEngine) analyzeResponse(
 
 		return responseVerdict{
 			isDone:       true,
-			finalAnswer:  response.Content,
-			emptyContent: response.Content == "",
+			finalAnswer:  answer,
+			emptyContent: answer == "",
+			contract:     parsedContract,
 			step:         step,
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 // KnowledgeQA performs knowledge base question answering with LLM summarization
@@ -1007,10 +1008,14 @@ func prepareFallbackMessages(
 	messages := buildFallbackMessages(chatManage, promptContent)
 	citationsEnabled := chatManage == nil || chatManage.CitationsEnabled()
 	registry := modelcontext.NewRegistry(citationsEnabled)
+	protocolPrompt := registry.ProtocolPrompt()
+	if chatManage != nil && videoevidence.Supports(chatManage.VideoEvidenceCitation) {
+		protocolPrompt += videoevidence.ProtocolPrompt()
+	}
 	if len(messages) > 0 && messages[0].Role == "system" {
-		messages[0].Content = strings.TrimRight(messages[0].Content, " \t\r\n") + registry.ProtocolPrompt()
+		messages[0].Content = strings.TrimRight(messages[0].Content, " \t\r\n") + protocolPrompt
 	} else {
-		messages = append([]chat.Message{{Role: "system", Content: strings.TrimSpace(registry.ProtocolPrompt())}}, messages...)
+		messages = append([]chat.Message{{Role: "system", Content: strings.TrimSpace(protocolPrompt)}}, messages...)
 	}
 	return registry.EncodeMessages(messages), registry
 }
@@ -1201,16 +1206,24 @@ func emitKnowledgeReferencesEvent(ctx context.Context, chatManage *types.ChatMan
 		return
 	}
 	logger.Infof(ctx, "Emitting references event with %d results (pre-answer)", len(chatManage.MergeResult))
+	videoEvidence, coverage := projectQuickVideoEvidence(chatManage.MergeResult)
 	if err := chatManage.EventBus.Emit(ctx, types.Event{
 		ID:        generateEventID("references"),
 		Type:      types.EventType(event.EventAgentReferences),
 		SessionID: chatManage.SessionID,
 		Data: event.AgentReferencesData{
-			References: chatManage.MergeResult,
+			References:    chatManage.MergeResult,
+			RouteMode:     "quick",
+			Coverage:      coverage,
+			VideoEvidence: videoEvidence,
 		},
 	}); err != nil {
 		logger.Errorf(ctx, "Failed to emit references event: %v", err)
 	}
+}
+
+func projectQuickVideoEvidence(refs []*types.SearchResult) ([]videoevidence.Evidence, string) {
+	return videoevidence.ProjectReferences(refs)
 }
 
 // emitFallbackAnswer emits fallback answer event

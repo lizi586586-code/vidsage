@@ -53,6 +53,7 @@ func (e *AgentEngine) streamLLMToEventBus(
 	firstChunkTime := time.Time{}
 	answerDecoder := e.modelContext.StreamDecoder()
 	thinkingDecoder := e.modelContext.StreamDecoder()
+	preserveAnswerHandles := e.config != nil && e.config.AnswerContractEnabled
 
 	for chunk := range stream {
 		chunkCount++
@@ -73,6 +74,9 @@ func (e *AgentEngine) streamLLMToEventBus(
 			if chunk.Done {
 				chunk.Content += thinkingDecoder.Flush()
 			}
+		} else if preserveAnswerHandles {
+			// The answer contract must be parsed before the public citation
+			// expander turns <ref> into legacy <kb>/<web> tags.
 		} else {
 			chunk.Content = answerDecoder.Feed(chunk.Content)
 			if chunk.Done {
@@ -108,7 +112,10 @@ func (e *AgentEngine) streamLLMToEventBus(
 			emitFunc(&chunk, result.Content)
 		}
 	}
-	answerTail := answerDecoder.Flush()
+	answerTail := ""
+	if !preserveAnswerHandles {
+		answerTail = answerDecoder.Flush()
+	}
 	thinkingTail := thinkingDecoder.Flush()
 	result.Content += answerTail
 	result.ReasoningContent += thinkingTail
@@ -170,10 +177,11 @@ func (e *AgentEngine) streamThinkingToEventBus(
 
 	parallelToolCalls := true
 	opts := &chat.ChatOptions{
-		Temperature:       e.config.Temperature,
-		Tools:             tools,
-		Thinking:          e.config.Thinking,
-		ParallelToolCalls: &parallelToolCalls,
+		Temperature:         e.config.Temperature,
+		MaxCompletionTokens: e.config.MaxCompletionTokens,
+		Tools:               tools,
+		Thinking:            e.config.Thinking,
+		ParallelToolCalls:   &parallelToolCalls,
 	}
 
 	pendingToolCalls := make(map[string]bool)
@@ -222,6 +230,11 @@ func (e *AgentEngine) streamThinkingToEventBus(
 		}
 	}
 	emitAnswer := func(content string) {
+		// Structured video answers are buffered and validated after the model
+		// finishes; never stream the JSON envelope to the user.
+		if e.config != nil && e.config.AnswerContractEnabled {
+			return
+		}
 		if content == "" {
 			return
 		}

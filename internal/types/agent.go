@@ -14,12 +14,13 @@ const DefaultMaxContextTokens = 200000
 // AgentConfig represents the full agent configuration (used at tenant level and runtime)
 // This includes all configuration parameters for agent execution
 type AgentConfig struct {
-	MaxIterations  int      `json:"max_iterations"`          // Maximum number of ReAct iterations
-	AllowedTools   []string `json:"allowed_tools"`           // List of allowed tool names
-	Temperature    float64  `json:"temperature"`             // LLM temperature for agent
-	KnowledgeBases []string `json:"knowledge_bases"`         // Accessible knowledge base IDs
-	KnowledgeIDs   []string `json:"knowledge_ids"`           // Accessible knowledge IDs (individual documents)
-	SystemPrompt   string   `json:"system_prompt,omitempty"` // Unified system prompt (uses web_search_status placeholder for dynamic behavior)
+	MaxIterations       int      `json:"max_iterations"`                  // Maximum number of ReAct iterations
+	MaxCompletionTokens int      `json:"max_completion_tokens,omitempty"` // Maximum completion tokens per LLM call
+	AllowedTools        []string `json:"allowed_tools"`                   // List of allowed tool names
+	Temperature         float64  `json:"temperature"`                     // LLM temperature for agent
+	KnowledgeBases      []string `json:"knowledge_bases"`                 // Accessible knowledge base IDs
+	KnowledgeIDs        []string `json:"knowledge_ids"`                   // Accessible knowledge IDs (individual documents)
+	SystemPrompt        string   `json:"system_prompt,omitempty"`         // Unified system prompt (uses web_search_status placeholder for dynamic behavior)
 	// Deprecated: Use SystemPrompt instead. Kept for backward compatibility during migration.
 	SystemPromptWebEnabled  string        `json:"system_prompt_web_enabled,omitempty"`  // Deprecated: Custom prompt when web search is enabled
 	SystemPromptWebDisabled string        `json:"system_prompt_web_disabled,omitempty"` // Deprecated: Custom prompt when web search is disabled
@@ -42,6 +43,10 @@ type AgentConfig struct {
 	Thinking *bool `json:"thinking"`
 	// Whether final answers include knowledge/web source citations. Nil defaults to true.
 	CitationEnabled *bool `json:"citation_enabled"`
+	// VideoEvidenceCitation declares the request-level video evidence contract,
+	// e.g. "v1". Empty means the agent may still return ordinary citations but
+	// must not produce clickable video evidence.
+	VideoEvidenceCitation string `json:"video_evidence_citation,omitempty"`
 	// Whether to retrieve knowledge base only when explicitly mentioned with @ (default: false)
 	RetrieveKBOnlyWhenMentioned bool `json:"retrieve_kb_only_when_mentioned"`
 
@@ -82,6 +87,11 @@ type AgentConfig struct {
 	// Whether to execute independent tool calls in parallel (default: false).
 	// When enabled and the LLM returns multiple tool calls, they run concurrently via errgroup.
 	ParallelToolCalls bool `json:"parallel_tool_calls,omitempty"`
+
+	// AnswerContractEnabled enables the validated video answer envelope.
+	// SkillUnavailable is a runtime degradation marker, not a call budget.
+	AnswerContractEnabled bool `json:"-"`
+	SkillUnavailable      bool `json:"-"`
 }
 
 // CitationsEnabled preserves citation output for legacy runtime configs that

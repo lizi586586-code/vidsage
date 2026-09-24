@@ -74,6 +74,7 @@ type qaRequestContext struct {
 	// what the user had selected on the UI (not server-side resolutions).
 	reqAgentEnabled bool
 	reqAgentID      string
+	autoRoute       bool
 }
 
 // buildQARequest converts the qaRequestContext into a types.QARequest for service invocation.
@@ -178,6 +179,27 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	kbIDs, knowledgeIDs := mergeKnowledgeTargets(request.KnowledgeBaseIDs, request.KnowledgeIds, request.MentionedItems)
 	if err := types.AuthorizeTenantAPIKeyKnowledgeTargets(ctx, kbIDs, knowledgeIDs); err != nil {
 		return nil, nil, err
+	}
+
+	// Auto-routing is only entered when no agent was explicitly selected. A
+	// user-selected quick-answer or custom/shared agent must retain its own
+	// behavior, even if a stale client also sends auto_route=true. The
+	// original agent ID is used for signed content-pipeline validation below;
+	// the resolved ID is only the execution target for this turn.
+	provenanceAgentID := request.AgentID
+	if request.AutoRoute && request.AgentID == "" && request.AgentSourceTenantID == 0 {
+		routeDecision := h.routeAgent(ctx, request.Query, session, request.SummaryModelID)
+		if routeDecision.Mode == routeModeQuick {
+			request.AgentID = types.BuiltinQuickAnswerID
+		} else {
+			request.AgentID = types.BuiltinSmartReasoningID
+		}
+		request.AgentEnabled = true
+		customAgent, effectiveTenantID, sharedAgentReadOnly = h.resolveAgent(ctx, c, request.AgentID, 0)
+		if customAgent == nil {
+			return nil, nil, errors.NewBadRequestError("自动路由目标智能体不可用")
+		}
+		logger.Infof(ctx, "Auto-routed session=%s query to mode=%s intent=%s scope_hint=%s reason=%s agent=%s", sessionID, routeDecision.Mode, routeDecision.Intent, routeDecision.ScopeHint, routeDecision.ReasonCode, request.AgentID)
 	}
 
 	// The built-in wiki fixer is invoked from a KB page, not from a tenant's
@@ -363,7 +385,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		c.GetHeader(contentprovenance.SignatureHeader),
 		request.Channel,
 		sessionID,
-		request.AgentID,
+		provenanceAgentID,
 		request.Query,
 		skillNames,
 		kbIDs,
@@ -418,6 +440,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		suggestionAttribution: request.SuggestionAttribution,
 		reqAgentEnabled:       request.AgentEnabled,
 		reqAgentID:            request.AgentID,
+		autoRoute:             request.AutoRoute,
 		resourceRewriter:      resourceRewriter,
 	}
 

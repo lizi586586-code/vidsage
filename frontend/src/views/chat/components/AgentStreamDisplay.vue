@@ -547,7 +547,7 @@ import { getAttachmentParsingSummaryHtml } from '@/utils/attachmentParsingDispla
 import { useChatCitationPopover } from '@/composables/useChatCitationPopover';
 import { useChatReferencesDrawer } from '@/composables/useChatReferencesDrawer';
 import type { KnowledgeReferenceLike, ReferenceHighlightTarget } from '@/utils/referenceSources';
-import { resolveCitationChunkId } from '@/utils/citationMarkdown';
+import { resolveCitationChunkId, shouldShowVideoCitationTitle } from '@/utils/citationMarkdown';
 import { getWikiPage, type WikiPage } from '@/api/wiki';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { useUIStore } from '@/stores/ui';
@@ -849,11 +849,13 @@ const props = defineProps<{
   embedSessionSig?: string;
   embedVisitorId?: string;
   ragMode?: boolean;
+  showVideoTitle?: boolean;
   followUpLoading?: boolean;
 }>();
 
 const emit = defineEmits<{
   (event: 'render-complete-change', ready: boolean): void;
+  (event: 'video-navigate', videoId: string, seconds: number): void;
 }>();
 
 const embedAuthProps = computed(() => ({
@@ -2127,6 +2129,14 @@ const handleCitationActivate = (el: HTMLElement) => {
   }
 };
 
+const handleVideoCitationActivate = (el: HTMLElement): boolean => {
+  const videoId = String(el.getAttribute('data-video-id') || '').trim();
+  const seconds = Number(el.getAttribute('data-video-seconds'));
+  if (!videoId || !Number.isFinite(seconds) || seconds < 0) return false;
+  emit('video-navigate', videoId, seconds);
+  return true;
+};
+
 const getKbIdForWiki = (slug: string): string => {
   if (route.params.kbId) return route.params.kbId as string;
 
@@ -2196,8 +2206,29 @@ const onRootClick = (e: Event) => {
     return;
   }
 
+  const videoEl = target.closest?.('.video-citation') as HTMLElement | null;
+  if (videoEl && videoEl.getAttribute('data-video-id')) {
+    e.preventDefault();
+    e.stopPropagation();
+    handleVideoCitationActivate(videoEl);
+    return;
+  }
+
+  const wikiFallbackEl = target.closest?.('.citation-wiki-fallback') as HTMLElement | null;
+  if (wikiFallbackEl && wikiFallbackEl.getAttribute('data-wiki-slug')) {
+    e.preventDefault();
+    e.stopPropagation();
+    const kbId = wikiFallbackEl.getAttribute('data-wiki-kb-id') || '';
+    const slug = wikiFallbackEl.getAttribute('data-wiki-slug') || '';
+    if (kbId && slug) {
+      openWikiDrawer(kbId, slug);
+    }
+    return;
+  }
+
   // Handle KB citation clicks -> open references drawer when available
   const kbEl = target.closest?.('.citation-kb') as HTMLElement | null;
+  if (kbEl?.classList.contains('citation-kb--plain')) return;
   if (kbEl && kbEl.getAttribute('data-chunk-id')) {
     e.preventDefault();
     e.stopPropagation();
@@ -2272,8 +2303,32 @@ const onRootKeydown = (e: KeyboardEvent) => {
     return;
   }
 
+  const videoEl = target.closest?.('.video-citation') as HTMLElement | null;
+  if (videoEl) {
+    if (videoEl.tagName === 'BUTTON') return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleVideoCitationActivate(videoEl);
+    }
+    return;
+  }
+
+  const wikiFallbackEl = target.closest?.('.citation-wiki-fallback') as HTMLElement | null;
+  if (wikiFallbackEl) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      const kbId = wikiFallbackEl.getAttribute('data-wiki-kb-id') || '';
+      const slug = wikiFallbackEl.getAttribute('data-wiki-slug') || '';
+      if (kbId && slug) {
+        openWikiDrawer(kbId, slug);
+      }
+    }
+    return;
+  }
+
   // Handle KB citation keyboard -> navigate to KB detail
   const kbEl = target.closest?.('.citation-kb') as HTMLElement | null;
+  if (kbEl?.classList.contains('citation-kb--plain')) return;
   if (kbEl) {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
@@ -2386,6 +2441,7 @@ const renderAgentMarkdown = (
     sanitizeHtml: sanitizeMarkdownHTML,
     streaming: !isConversationDone.value,
     knowledgeReferences: getReferencesForDrawer(),
+    showVideoTitle: props.showVideoTitle ?? shouldShowVideoCitationTitle(props.userQuery || '', getReferencesForDrawer()),
     cachedMermaidSvgHtml: streamingMermaidSvgCache.value,
     prepareMarkdown: prepareAgentMarkdown,
     injectCachedMermaidSvg,
@@ -2888,6 +2944,31 @@ const handleAddToKnowledge = (answerEvent: any) => {
 
   &.is-embedded {
     margin-bottom: 0;
+  }
+
+  :deep(.video-citation) {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 3px;
+    margin: 0 2px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--td-brand-color);
+    cursor: pointer;
+    font: inherit;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+
+  :deep(.video-citation:hover),
+  :deep(.video-citation:focus-visible) {
+    color: var(--td-brand-color-hover);
+  }
+
+  :deep(.video-citation__time) {
+    white-space: nowrap;
   }
 }
 

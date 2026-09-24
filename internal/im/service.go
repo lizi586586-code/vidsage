@@ -32,6 +32,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/storageurl"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -669,16 +670,21 @@ func createIMAssistantMessagePayload(sessionID, requestID string) *types.Message
 }
 
 func collectIMKnowledgeReferences(dst *[]*types.SearchResult, refs interface{}) {
+	if dst == nil {
+		return
+	}
+	incoming := make([]*types.SearchResult, 0)
 	switch v := refs.(type) {
 	case []*types.SearchResult:
-		*dst = append(*dst, v...)
+		incoming = append(incoming, v...)
 	case []interface{}:
 		for _, ref := range v {
 			if sr, ok := ref.(*types.SearchResult); ok {
-				*dst = append(*dst, sr)
+				incoming = append(incoming, sr)
 			}
 		}
 	}
+	*dst = videoevidence.MergeReferences(*dst, videoevidence.EnrichReferences(incoming))
 }
 
 func sanitizeIMAgentSteps(raw interface{}) types.AgentSteps {

@@ -1,5 +1,7 @@
 /** Shared citation tag preprocessing for chat markdown (QA + agent). */
 
+import type { VideoEvidence, WikiFallback } from '@/types/videohub'
+
 /** Self-closing or unclosed `<kb/>` / `<web/>` tags from model output. */
 export const KB_WEB_TAG_RE = /<(?:kb|web)\b[^>]*?\s*\/?>/g
 const KB_TAG_ATTR_RE = /<kb\b([^>]*?)\s*\/?>/g
@@ -33,12 +35,42 @@ export function stripIncompleteCitationTag(content: string): string {
 
 export type CitationKnowledgeRef = {
   id?: string
+  chunk_ids?: string[]
   knowledge_id?: string
   knowledge_title?: string
   knowledge_filename?: string
   chunk_index?: number
   chunk_type?: string
   knowledge_base_id?: string
+  video_evidence?: VideoEvidence
+  wiki_fallback?: WikiFallback
+  video_evidence_unavailable?: boolean
+}
+
+export type CitationDisplayOptions = {
+  showVideoTitle?: boolean
+}
+
+const VIDEO_TITLE_REQUIRED_RE = /哪个视频|哪些视频|分别(?:在哪个|是哪个)?视频|分别|各个视频|各视频|两个视频|多视频|跨视频|视频之间|哪条视频|视频名称|来源视频/
+const CURRENT_VIDEO_SCOPE_RE = /这个视频|当前视频|本视频|该视频/
+
+/** Show titles only when the question or evidence set needs source disambiguation. */
+export function shouldShowVideoCitationTitle(
+  question: string,
+  refs?: CitationKnowledgeRef[] | null,
+): boolean {
+  const normalizedQuestion = String(question || '').trim()
+  if (VIDEO_TITLE_REQUIRED_RE.test(normalizedQuestion)) return true
+  // The question already supplies the source context. Keep timeline
+  // citations compact even if retrieval returned supporting references from
+  // another source.
+  if (CURRENT_VIDEO_SCOPE_RE.test(normalizedQuestion)) return false
+  const videoIds = new Set(
+    (refs || [])
+      .map((ref) => ref.video_evidence?.videoId)
+      .filter((videoId): videoId is string => Boolean(videoId)),
+  )
+  return videoIds.size > 1
 }
 
 function parseTagAttributes(attrString: string): Record<string, string> {
@@ -146,6 +178,7 @@ export function resolveCitationChunkId(
 export function preprocessCitationTags(
   contentStr: string,
   refs?: CitationKnowledgeRef[] | null,
+  options: CitationDisplayOptions = {},
 ): string {
   if (!contentStr.trim()) return ''
 
@@ -177,10 +210,44 @@ export function preprocessCitationTags(
       const chunkId = resolveCitationChunkId(rawChunkId, { doc, kbId }, refs)
       if (!doc || !chunkId) return ''
 
+      const videoEvidence = findVideoEvidence(rawChunkId, chunkId, refs)
+      if (videoEvidence?.linkable && videoEvidence.videoId) {
+        const safeVideoId = escapeHtml(videoEvidence.videoId)
+        const safeSeconds = escapeHtml(String(videoEvidence.startSeconds))
+        const safeTitle = escapeHtml(videoEvidence.videoTitle || doc)
+        const range = `${videoEvidence.startTimestamp}–${videoEvidence.endTimestamp}`
+        const safeRange = escapeHtml(range)
+        const includeTitle = options.showVideoTitle !== false
+        const label = includeTitle
+          ? `《${videoEvidence.videoTitle || doc}》「${range}」`
+          : `「${range}」`
+        const title = options.showVideoTitle === false
+          ? ''
+          : `<span class="video-citation__title">《${safeTitle}》</span>`
+        return `<button type="button" class="video-citation" data-video-id="${safeVideoId}" data-video-seconds="${safeSeconds}" aria-label="${escapeHtml(label)}">${title}<span class="video-citation__time">「${safeRange}」</span></button>`
+      }
+
       const safeDoc = escapeHtml(doc)
       const safeKbId = escapeHtml(kbId)
       const safeChunkId = escapeHtml(chunkId)
       const displayDoc = escapeHtml(truncateMiddle(doc))
+      const unresolvedVideoSource = (refs || []).some(ref => {
+        const ids = [ref.id, ref.knowledge_id, ...(Array.isArray(ref.chunk_ids) ? ref.chunk_ids : [])]
+          .map(value => String(value || '').trim())
+          .filter(Boolean)
+        return ref.video_evidence_unavailable && (ids.includes(rawChunkId) || ids.includes(chunkId))
+      })
+      if (unresolvedVideoSource) {
+        return `<span class="citation citation-kb citation-kb--plain"><span class="citation-icon citation-icon--book" aria-hidden="true"></span><span class="citation-text">${displayDoc}</span></span>`
+      }
+      const wikiFallback = findWikiFallback(rawChunkId, chunkId, refs)
+      if (wikiFallback?.linkable && wikiFallback.knowledgeBaseId && wikiFallback.slug) {
+        const safeWikiKBID = escapeHtml(wikiFallback.knowledgeBaseId)
+        const safeWikiPageID = escapeHtml(wikiFallback.pageId)
+        const safeWikiSlug = escapeHtml(wikiFallback.slug)
+        const safeWikiTitle = escapeHtml(wikiFallback.title || doc)
+        return `<span class="citation citation-wiki-fallback" data-wiki-kb-id="${safeWikiKBID}" data-wiki-page-id="${safeWikiPageID}" data-wiki-slug="${safeWikiSlug}" data-doc="${safeWikiTitle}" role="button" tabindex="0"><span class="citation-icon citation-icon--book" aria-hidden="true"></span><span class="citation-text">${safeWikiTitle}</span></span>`
+      }
       return `<span class="citation citation-kb" data-kb-id="${safeKbId}" data-chunk-id="${safeChunkId}" data-doc="${safeDoc}" role="button" tabindex="0"><span class="citation-icon citation-icon--book" aria-hidden="true"></span><span class="citation-text">${displayDoc}</span><span class="citation-tip"><span class="tip-loading">…</span></span></span>`
     })
     .replace(/\[\[([^\]]+)\]\]/g, (match, inner: string) => {
@@ -198,12 +265,77 @@ export function preprocessCitationTags(
     })
 }
 
+function findVideoEvidence(
+  rawChunkId: string,
+  resolvedChunkId: string,
+  refs?: CitationKnowledgeRef[] | null,
+): VideoEvidence | undefined {
+  const raw = String(rawChunkId || '').trim()
+  const resolved = String(resolvedChunkId || '').trim()
+  return (refs || []).find((ref) => {
+    const ids = [
+      ref.id,
+      ref.knowledge_id,
+      ...(Array.isArray(ref.chunk_ids) ? ref.chunk_ids : []),
+    ].map((value) => String(value || '').trim()).filter(Boolean)
+    return ids.includes(raw) || ids.includes(resolved)
+  })?.video_evidence
+}
+
+function findWikiFallback(
+  rawChunkId: string,
+  resolvedChunkId: string,
+  refs?: CitationKnowledgeRef[] | null,
+): WikiFallback | undefined {
+  const raw = String(rawChunkId || '').trim()
+  const resolved = String(resolvedChunkId || '').trim()
+  return (refs || []).find(ref => {
+    const ids = [
+      ref.id,
+      ref.knowledge_id,
+      ...(Array.isArray(ref.chunk_ids) ? ref.chunk_ids : []),
+    ].map(value => String(value || '').trim()).filter(Boolean)
+    return ids.includes(raw) || ids.includes(resolved)
+  })?.wiki_fallback
+}
+
+const DUPLICATE_VIDEO_TITLE_BEFORE_KB_RE =
+  /《([^》]+)》([ \t]+|\n[ \t]*)(<kb\b([^>]*?)\s*\/?>)/gi
+
+/**
+ * Older answers sometimes put the video title on its own line immediately
+ * before the citation tag. The validated citation projection already renders
+ * that title, so remove only the exact title/tag duplicate while preserving
+ * ordinary mentions of the video title.
+ */
+function removeDuplicateVideoTitleBeforeCitation(
+  contentStr: string,
+  refs?: CitationKnowledgeRef[] | null,
+): string {
+  return contentStr.replace(
+    DUPLICATE_VIDEO_TITLE_BEFORE_KB_RE,
+    (match, title: string, separator: string, tag: string, attrString: string) => {
+      const attrs = parseTagAttributes(attrString)
+      const doc = attrs.doc || ''
+      const rawChunkId = attrs.chunk_id || attrs.chunkId || ''
+      const chunkId = resolveCitationChunkId(rawChunkId, { doc, kbId: attrs.kb_id || attrs.kbId || '' }, refs)
+      const evidence = findVideoEvidence(rawChunkId, chunkId, refs)
+      const renderedTitle = evidence?.videoTitle || doc
+      if (!evidence?.linkable || !docTitlesMatch(title.trim(), renderedTitle.trim())) {
+        return match
+      }
+      return `${separator.includes('\n') ? ' ' : separator}${tag}`
+    },
+  )
+}
+
 const HTML_PLACEHOLDER_RE = /@@WEKNORA_HTML_PLACEHOLDER_(\d+)@@/g
 
 /** Protect citation HTML from markdown parser; restore after marked.parse. */
 export function extractCitationHtmlPlaceholders(
   contentStr: string,
   refs?: CitationKnowledgeRef[] | null,
+  options: CitationDisplayOptions = {},
 ): { content: string; htmlSnippets: string[] } {
   const htmlSnippets: string[] = []
   const storeHtml = (html: string): string => {
@@ -212,9 +344,10 @@ export function extractCitationHtmlPlaceholders(
     return `@@WEKNORA_HTML_PLACEHOLDER_${idx}@@`
   }
 
-  const content = contentStr
-    .replace(KB_WEB_TAG_RE, (match) => storeHtml(preprocessCitationTags(match, refs)))
-    .replace(/\[\[([^\]]+)\]\]/g, (match) => storeHtml(preprocessCitationTags(match, refs)))
+  const normalizedContent = removeDuplicateVideoTitleBeforeCitation(contentStr, refs)
+  const content = normalizedContent
+    .replace(KB_WEB_TAG_RE, (match) => storeHtml(preprocessCitationTags(match, refs, options)))
+    .replace(/\[\[([^\]]+)\]\]/g, (match) => storeHtml(preprocessCitationTags(match, refs, options)))
 
   return { content, htmlSnippets }
 }
@@ -277,7 +410,7 @@ export function joinCitationTagsToPreviousLine(content: string): string {
 }
 
 const CITATION_HTML_FRAGMENT =
-  '(?:<span class="citation\\b[^]*?</span>|<a class="citation\\b[^]*?</a>)'
+  '(?:<span class="citation\\b[^]*?</span>|<a class="citation\\b[^]*?</a>|<button\\b[^>]*class="video-citation\\b[^]*?</button>)'
 
 /** Merge citation-only <p> blocks into the preceding paragraph (marked splits on newlines). */
 export function collapseStandaloneCitationParagraphs(html: string): string {

@@ -246,6 +246,10 @@ func (s *agentService) CreateAgentEngine(
 			logger.Infof(ctx, "Skills manager initialized with %d skills",
 				len(skillsManager.GetAllMetadata()))
 		}
+		if config.AnswerContractEnabled && skillsManager == nil {
+			config.SkillUnavailable = true
+			logger.Warnf(ctx, "Video reasoning skill unavailable; continuing with partial evidence contract")
+		}
 	}
 
 	return engine, nil

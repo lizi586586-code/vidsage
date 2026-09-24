@@ -6359,5 +6359,14 @@ export default {
     myChats: '내 대화',
     apiChats: 'API 세션',
     noSessions: '대화가 없습니다'
+  },
+  videohub: {
+    agentPicker: {
+      title: '에이전트',
+      autoRoute: '자동 라우팅',
+      quickAnswer: '빠른 답변',
+      customAgent: '사용자 지정 추론',
+      fetchFailed: '에이전트 정보를 불러오지 못해 기본 이름을 표시합니다'
+    }
   }
 }

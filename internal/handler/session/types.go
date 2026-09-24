@@ -46,6 +46,7 @@ type CreateKnowledgeQARequest struct {
 	KnowledgeBaseIDs      []string                     `json:"knowledge_base_ids"`                    // Selected knowledge base ID for this request
 	KnowledgeIds          []string                     `json:"knowledge_ids"`                         // Selected knowledge ID for this request
 	AgentEnabled          bool                         `json:"agent_enabled"`                         // Whether agent mode is enabled for this request
+	AutoRoute             bool                         `json:"auto_route"`                            // Whether the backend should classify this turn and select a builtin agent
 	AgentID               string                       `json:"agent_id"`                              // Selected custom agent ID (backend resolves shared agent and its workspace from share relation)
 	AgentSourceTenantID   uint64                       `json:"agent_source_tenant_id,omitempty"`      // Optional disambiguator; backend still verifies the share relation
 	WebSearchEnabled      bool                         `json:"web_search_enabled"`                    // Whether web search is enabled for this request

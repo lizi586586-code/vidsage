@@ -128,6 +128,9 @@ type CustomAgentConfig struct {
 	// Whether final answers include knowledge/web source citations. Nil defaults to true
 	// so agents saved before this option was introduced keep their existing behavior.
 	CitationEnabled *bool `yaml:"citation_enabled" json:"citation_enabled"`
+	// VideoEvidenceCitation enables the versioned public video citation contract.
+	// Empty means ordinary knowledge citations only.
+	VideoEvidenceCitation string `yaml:"video_evidence_citation" json:"video_evidence_citation,omitempty"`
 
 	// ===== Agent Mode Settings =====
 	// Maximum iterations for ReAct loop (only for agent type)

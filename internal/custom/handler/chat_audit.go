@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/Tencent/WeKnora/internal/custom/model"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 type ChatAuditHandler struct {
@@ -22,9 +23,15 @@ type chatSourceAuditRequest struct {
 	SessionID          string   `json:"session_id"`
 	Scope              string   `json:"scope"`
 	VideoID            string   `json:"video_id"`
+	CapabilityVersion  string   `json:"capability_version"`
+	RouteMode          string   `json:"route_mode"`
+	Coverage           string   `json:"coverage"`
 	SourceMode         string   `json:"source_mode"`
 	FallbackUsed       bool     `json:"fallback_used"`
 	ReferencesFound    int      `json:"references_found"`
+	LinkableEvidence   int      `json:"linkable_evidence"`
+	InvalidReferences  int      `json:"invalid_references"`
+	DegradationCode    string   `json:"degradation_code"`
 	WikiPageIDs        []string `json:"wiki_page_ids"`
 	KnowledgeObjectIDs []string `json:"knowledge_object_ids"`
 	TranscriptChunkIDs []string `json:"transcript_chunk_ids"`
@@ -46,13 +53,39 @@ func (h *ChatAuditHandler) RecordSourceAudit(c *gin.Context) {
 	input.SessionID = strings.TrimSpace(input.SessionID)
 	input.Scope = strings.TrimSpace(input.Scope)
 	input.VideoID = strings.TrimSpace(input.VideoID)
+	input.CapabilityVersion = strings.TrimSpace(input.CapabilityVersion)
+	input.RouteMode = strings.TrimSpace(input.RouteMode)
+	input.Coverage = strings.TrimSpace(input.Coverage)
 	input.SourceMode = strings.TrimSpace(input.SourceMode)
+	input.DegradationCode = strings.TrimSpace(input.DegradationCode)
 	if input.EventID == "" || input.SessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "event_id 和 session_id 不能为空"})
 		return
 	}
 	if input.ReferencesFound < 0 {
 		input.ReferencesFound = 0
+	}
+	if input.LinkableEvidence < 0 {
+		input.LinkableEvidence = 0
+	}
+	if input.InvalidReferences < 0 {
+		input.InvalidReferences = 0
+	}
+	if input.CapabilityVersion != "" && !videoevidence.Supports(input.CapabilityVersion) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "capability_version 无效"})
+		return
+	}
+	if input.RouteMode != "" && input.RouteMode != "quick" && input.RouteMode != "reasoning" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "route_mode 无效"})
+		return
+	}
+	if input.Coverage != "" && input.Coverage != "complete" && input.Coverage != "partial" && input.Coverage != "none" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "coverage 无效"})
+		return
+	}
+	if input.DegradationCode != "" && !validDegradationCode(input.DegradationCode) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "degradation_code 无效"})
+		return
 	}
 	if input.SourceMode == "" {
 		input.SourceMode = sourceMode(len(input.WikiPageIDs) > 0, len(input.TranscriptChunkIDs) > 0)
@@ -69,9 +102,15 @@ func (h *ChatAuditHandler) RecordSourceAudit(c *gin.Context) {
 		SessionID:          input.SessionID,
 		Scope:              input.Scope,
 		VideoID:            input.VideoID,
+		CapabilityVersion:  input.CapabilityVersion,
+		RouteMode:          input.RouteMode,
+		Coverage:           input.Coverage,
 		SourceMode:         input.SourceMode,
 		FallbackUsed:       input.FallbackUsed,
 		ReferencesFound:    input.ReferencesFound,
+		LinkableEvidence:   input.LinkableEvidence,
+		InvalidReferences:  input.InvalidReferences,
+		DegradationCode:    input.DegradationCode,
 		WikiPageIDs:        encodeIDs(input.WikiPageIDs),
 		KnowledgeObjectIDs: encodeIDs(input.KnowledgeObjectIDs),
 		TranscriptChunkIDs: encodeIDs(input.TranscriptChunkIDs),
@@ -79,8 +118,10 @@ func (h *ChatAuditHandler) RecordSourceAudit(c *gin.Context) {
 	result := h.db.WithContext(c.Request.Context()).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "event_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"session_id", "scope", "video_id", "source_mode", "fallback_used",
-			"references_found", "wiki_page_ids", "knowledge_object_ids",
+			"session_id", "scope", "video_id", "capability_version", "route_mode",
+			"coverage", "source_mode", "fallback_used", "references_found",
+			"linkable_evidence", "invalid_references", "degradation_code",
+			"wiki_page_ids", "knowledge_object_ids",
 			"transcript_chunk_ids", "updated_at",
 		}),
 	}).Create(&audit)
@@ -89,6 +130,27 @@ func (h *ChatAuditHandler) RecordSourceAudit(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"event_id": input.EventID}})
+}
+
+func validDegradationCode(code string) bool {
+	switch code {
+	case "no_evidence",
+		"partial_coverage",
+		"invalid_evidence",
+		"skill_unavailable",
+		"reasoning_budget_exceeded",
+		"reasoning_timeout",
+		"answer_contract_truncated",
+		"answer_contract_invalid",
+		"empty_response",
+		"final_answer_generation_failed",
+		"llm_call_failed_after_tool_results",
+		"context_cancelled",
+		"production_graph_missing_audited_wiki_write":
+		return true
+	default:
+		return false
+	}
 }
 
 func encodeIDs(values []string) string {

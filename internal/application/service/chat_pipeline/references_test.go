@@ -137,3 +137,34 @@ func TestPrepareMessagesWithModelContextSuppressesCitationsWhenDisabled(t *testi
 	require.NotContains(t, messages[1].Content, "chunk-1")
 	require.Equal(t, "answer ", refs.DecodeOutputText(`answer <ref id="c1"/>`))
 }
+
+func TestPrepareMessagesWithModelContextInjectsVideoEvidenceProtocolOnlyWhenDeclared(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		capability string
+		contains   bool
+	}{
+		{name: "declared", capability: "v1", contains: true},
+		{name: "not declared", capability: "", contains: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manage := &types.ChatManage{
+				PipelineRequest: types.PipelineRequest{
+					Query:                 "question",
+					VideoEvidenceCitation: tc.capability,
+					SummaryConfig:         types.SummaryConfig{Prompt: "system"},
+				},
+				PipelineState: types.PipelineState{
+					UserContent: "question",
+				},
+			}
+
+			messages, _ := prepareMessagesWithModelContext(context.Background(), manage)
+			if tc.contains {
+				require.Contains(t, messages[0].Content, "video_evidence_citation/v1")
+			} else {
+				require.NotContains(t, messages[0].Content, "video_evidence_citation/v1")
+			}
+		})
+	}
+}

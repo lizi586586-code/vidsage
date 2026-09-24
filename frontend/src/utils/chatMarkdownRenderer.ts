@@ -39,6 +39,8 @@ export type RenderChatMarkdownOptions = {
   streaming?: boolean
   collapseStandaloneCitations?: boolean
   knowledgeReferences?: CitationKnowledgeRef[] | null
+  /** Hide video titles when the question context already identifies one source. */
+  showVideoTitle?: boolean
   cachedMermaidSvgHtml?: string | null
   injectCachedMermaidSvg?: (html: string, cachedSvgHtml?: string | null) => string
   prepareMarkdown?: (markdown: string, cachedSvgHtml?: string | null) => string
@@ -483,7 +485,9 @@ export function renderChatMarkdown(rawMarkdown: unknown, options: RenderChatMark
   // Convert <kb>/<web>/wiki tags to HTML placeholders before escapeMarkdown so
   // agent sanitizers (e.g. UUID stripping) cannot damage chunk_id attributes.
   const { content: markdownWithPlaceholders, htmlSnippets } =
-    extractCitationHtmlPlaceholders(flankingSafeMarkdown, options.knowledgeReferences)
+    extractCitationHtmlPlaceholders(flankingSafeMarkdown, options.knowledgeReferences, {
+      showVideoTitle: options.showVideoTitle,
+    })
   const escapedMarkdown = options.escapeMarkdown(markdownWithPlaceholders)
   const html = marked.parse(markdownWithPlaceholders, {
     renderer: options.renderer,

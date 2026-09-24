@@ -19,6 +19,7 @@ import {
   collapseStandaloneCitationParagraphs,
   joinCitationTagsToPreviousLine,
   resolveCitationChunkId,
+  shouldShowVideoCitationTitle,
   stripIncompleteCitationTag,
 } from './citationMarkdown.ts'
 
@@ -631,4 +632,221 @@ test('collapseStandaloneCitationParagraphs merges citations across empty paragra
   const out = collapseStandaloneCitationParagraphs(html)
   assert.match(out, /Steps:.*citation-kb/s)
   assert.doesNotMatch(out, /<p><\/p>/)
+})
+
+test('renderChatMarkdown projects validated transcript citations into clickable video ranges', () => {
+  const html = renderChatMarkdown(
+    '提示词公式见这里 <kb doc="提示词课程" chunk_id="chunk-1" />。',
+    {
+      renderer: createChatMarkdownRenderer(),
+      escapeMarkdown: (text) => text,
+      sanitizeHtml: (value) => value,
+      knowledgeReferences: [{
+        id: 'chunk-1',
+        knowledge_title: '提示词课程',
+        video_evidence: {
+          videoId: 'video-1',
+          videoTitle: 'AI提示词课程',
+          startMs: 192000,
+          endMs: 228000,
+          startSeconds: 192,
+          endSeconds: 228,
+          startTimestamp: '03:12',
+          endTimestamp: '03:48',
+          evidenceSentenceId: 'evs:1',
+          transcriptGeneration: 'generation-1',
+          sourceType: 'transcript',
+          linkable: true,
+        },
+      }],
+    },
+  )
+
+  assert.match(html, /class="video-citation"/)
+  assert.match(html, /<button type="button" class="video-citation"/)
+  assert.match(html, /《AI提示词课程》/)
+  assert.match(html, /「03:12–03:48」/)
+  assert.match(html, /data-video-id="video-1"/)
+  assert.match(html, /data-video-seconds="192"/)
+})
+
+test('renderChatMarkdown hides a video title when the question context already identifies the video', () => {
+  const html = renderChatMarkdown(
+    '相关位置见 <kb doc="提示词课程" chunk_id="chunk-1" />。',
+    {
+      renderer: createChatMarkdownRenderer(),
+      escapeMarkdown: (text) => text,
+      sanitizeHtml: (value) => value,
+      showVideoTitle: false,
+      knowledgeReferences: [{
+        id: 'chunk-1',
+        video_evidence: {
+          videoId: 'video-1',
+          videoTitle: 'AI提示词课程',
+          startMs: 116000,
+          endMs: 132000,
+          startSeconds: 116,
+          endSeconds: 132,
+          startTimestamp: '01:56',
+          endTimestamp: '02:12',
+          evidenceSentenceId: 'evs:1',
+          transcriptGeneration: 'generation-1',
+          sourceType: 'transcript',
+          linkable: true,
+        },
+      }],
+    },
+  )
+
+  assert.doesNotMatch(html, /video-citation__title/)
+  assert.doesNotMatch(html, /AI提示词课程/)
+  assert.match(html, /「01:56–02:12」/)
+})
+
+test('shouldShowVideoCitationTitle follows question semantics and source ambiguity', () => {
+  const refs = [
+    {
+      video_evidence: {
+        videoId: 'video-1', videoTitle: '视频一', startMs: 0, endMs: 1000,
+        startSeconds: 0, endSeconds: 1, startTimestamp: '00:00', endTimestamp: '00:01',
+        evidenceSentenceId: 'evs:1', transcriptGeneration: 'generation-1', sourceType: 'transcript' as const, linkable: true,
+      },
+    },
+  ]
+  assert.equal(shouldShowVideoCitationTitle('这个视频哪里提到自定义 skill', refs), false)
+  assert.equal(shouldShowVideoCitationTitle('哪个视频提到自定义 skill', refs), true)
+  assert.equal(shouldShowVideoCitationTitle('两个视频分别在哪里提到自定义 skill', refs), true)
+  assert.equal(shouldShowVideoCitationTitle('这个视频哪里提到自定义 skill', [
+    ...refs,
+    {
+      video_evidence: {
+        videoId: 'video-2', videoTitle: '视频二', startMs: 1000, endMs: 2000,
+        startSeconds: 1, endSeconds: 2, startTimestamp: '00:01', endTimestamp: '00:02',
+        evidenceSentenceId: 'evs:2', transcriptGeneration: 'generation-1', sourceType: 'transcript' as const, linkable: true,
+      },
+    },
+  ]), false)
+  assert.equal(shouldShowVideoCitationTitle('哪里提到自定义 skill', [
+    ...refs,
+    {
+      video_evidence: {
+        videoId: 'video-2', videoTitle: '视频二', startMs: 1000, endMs: 2000,
+        startSeconds: 1, endSeconds: 2, startTimestamp: '00:01', endTimestamp: '00:02',
+        evidenceSentenceId: 'evs:2', transcriptGeneration: 'generation-1', sourceType: 'transcript' as const, linkable: true,
+      },
+    },
+  ]), true)
+})
+
+test('renderChatMarkdown removes a legacy duplicate video title before a validated citation', () => {
+  const html = renderChatMarkdown(
+    '《AI提示词课程》\n<kb doc="提示词课程" chunk_id="chunk-1" /> 讲解提示词公式。',
+    {
+      renderer: createChatMarkdownRenderer(),
+      escapeMarkdown: (text) => text,
+      sanitizeHtml: (value) => value,
+      knowledgeReferences: [{
+        id: 'chunk-1',
+        knowledge_title: '提示词课程',
+        video_evidence: {
+          videoId: 'video-1',
+          videoTitle: 'AI提示词课程',
+          startMs: 192000,
+          endMs: 228000,
+          startSeconds: 192,
+          endSeconds: 228,
+          startTimestamp: '03:12',
+          endTimestamp: '03:48',
+          evidenceSentenceId: 'evs:1',
+          transcriptGeneration: 'generation-1',
+          sourceType: 'transcript',
+          linkable: true,
+        },
+      }],
+    },
+  )
+
+  assert.equal((html.match(/<span class="video-citation__title">《AI提示词课程》<\/span>/g) || []).length, 1)
+  assert.doesNotMatch(html, /<p>《AI提示词课程》<\/p>/)
+  assert.match(html, /「03:12–03:48」/)
+})
+
+test('renderChatMarkdown projects unavailable video evidence into a validated Wiki fallback', () => {
+  const html = renderChatMarkdown(
+    '<kb doc="提示词课程" chunk_id="chunk-wiki" />',
+    {
+      renderer: createChatMarkdownRenderer(),
+      escapeMarkdown: (text) => text,
+      sanitizeHtml: (value) => value,
+      knowledgeReferences: [{
+        id: 'chunk-wiki',
+        knowledge_title: '提示词课程',
+        wiki_fallback: {
+          pageId: 'wiki-page-1',
+          slug: 'video/example/transcript',
+          title: '提示词课程：转写',
+          knowledgeBaseId: 'knowledge-kb',
+          linkable: true,
+        },
+      }],
+    },
+  )
+
+  assert.match(html, /class="citation citation-wiki-fallback"/)
+  assert.match(html, /data-wiki-kb-id="knowledge-kb"/)
+  assert.match(html, /data-wiki-slug="video\/example\/transcript"/)
+  assert.doesNotMatch(html, /citation-kb--plain/)
+})
+
+test('renderChatMarkdown suppresses Wiki fallback when video evidence is unavailable', () => {
+  const html = renderChatMarkdown(
+    '<kb doc="提示词课程" chunk_id="chunk-wiki" />',
+    {
+      renderer: createChatMarkdownRenderer(),
+      escapeMarkdown: (text) => text,
+      sanitizeHtml: (value) => value,
+      knowledgeReferences: [{
+        id: 'chunk-wiki',
+        video_evidence_unavailable: true,
+        wiki_fallback: {
+          pageId: 'wiki-page-1',
+          slug: 'video/example/transcript',
+          title: '提示词课程：转写',
+          knowledgeBaseId: 'knowledge-kb',
+          linkable: true,
+        },
+      }],
+    },
+  )
+
+  assert.match(html, /citation-kb--plain/)
+  assert.doesNotMatch(html, /citation-wiki-fallback/)
+  assert.doesNotMatch(html, /data-wiki-slug=/)
+})
+
+test('renderChatMarkdown keeps an unresolved video citation as plain text', () => {
+  const html = renderChatMarkdown(
+    '<kb doc="提示词课程" chunk_id="chunk-unresolved" />',
+    {
+      renderer: createChatMarkdownRenderer(),
+      escapeMarkdown: (text) => text,
+      sanitizeHtml: (value) => value,
+      knowledgeReferences: [{
+        id: 'chunk-unresolved',
+        knowledge_title: '提示词课程',
+        video_evidence_unavailable: true,
+      }],
+    },
+  )
+
+  assert.match(html, /citation-kb--plain/)
+  assert.doesNotMatch(html, /role="button"/)
+  assert.doesNotMatch(html, /data-kb-id=/)
+})
+
+test('collapseStandaloneCitationParagraphs merges standalone video citations into previous text', () => {
+  const html = '<p>提示词公式见</p><p><button type="button" class="video-citation" data-video-id="video-1">「03:12–03:48」</button></p>'
+  const out = collapseStandaloneCitationParagraphs(html)
+  assert.match(out, /提示词公式见 <button type="button" class="video-citation"/)
+  assert.doesNotMatch(out, /<\/p>\s*<p><button type="button" class="video-citation"/)
 })

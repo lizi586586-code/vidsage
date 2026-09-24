@@ -119,10 +119,11 @@ relations: []
 
 一句话概述：这是可展示的概念内容。`
 	secondContent := strings.Replace(objectContent, "object-1", "object-2", 1)
+	secondContent = strings.Replace(secondContent, "# 概念", "# 机制", 1)
 	report := auditPages(video, "knowledge-kb", []weknora.WikiPage{
 		index,
-		{ID: "object-1", Slug: "concept/object-1", PageType: "index", Content: objectContent},
-		{ID: "object-2", Slug: "concept/object-2", PageType: "index", Content: secondContent},
+		{ID: "object-1", Slug: "concept/object-1", Title: "概念一", PageType: "index", Content: objectContent},
+		{ID: "object-2", Slug: "concept/object-2", Title: "机制二", PageType: "index", Content: secondContent},
 	})
 
 	require.True(t, report.NeedsRepair)

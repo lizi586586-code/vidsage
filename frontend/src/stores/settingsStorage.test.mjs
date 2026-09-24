@@ -6,7 +6,12 @@ const BUILTIN_QUICK_ANSWER_ID = "builtin-quick-answer";
 const BUILTIN_SMART_REASONING_ID = "builtin-smart-reasoning";
 
 function reconcileBuiltinAgentMode(settings) {
-  const agentId = settings.selectedAgentId || BUILTIN_QUICK_ANSWER_ID;
+  const agentId = settings.selectedAgentId || "";
+  if (!agentId) {
+    if (!settings.isAgentEnabled) return false;
+    settings.isAgentEnabled = false;
+    return true;
+  }
   if (agentId === BUILTIN_QUICK_ANSWER_ID && settings.isAgentEnabled) {
     settings.isAgentEnabled = false;
     return true;
@@ -31,7 +36,13 @@ function reconcileLoadedSettings(loaded) {
   loaded.selectedMCPServices ||= [];
   loaded.selectedSkills ||= loaded.selectedTools || [];
   loaded.selectedFileKbMap ||= {};
-  if (reconcileBuiltinAgentMode(loaded)) {
+  const migratedLegacyQuickAnswerDefault = loaded.selectedAgentExplicit === undefined
+    && loaded.selectedAgentId === BUILTIN_QUICK_ANSWER_ID;
+  if (migratedLegacyQuickAnswerDefault) {
+    loaded.selectedAgentId = "";
+    loaded.selectedAgentExplicit = false;
+  }
+  if (migratedLegacyQuickAnswerDefault || reconcileBuiltinAgentMode(loaded)) {
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(loaded));
   }
   return loaded;
@@ -64,7 +75,8 @@ function loadAndReconcileSettings(defaultSettings) {
 function makeDefaults() {
   return {
     isAgentEnabled: false,
-    selectedAgentId: BUILTIN_QUICK_ANSWER_ID,
+    selectedAgentId: "",
+    selectedAgentExplicit: false,
     selectedTags: [],
     selectedMCPServices: [],
     selectedSkills: [],
@@ -141,6 +153,7 @@ test("loadAndReconcileSettings keeps valid stored settings", () => {
   const stored = {
     isAgentEnabled: true,
     selectedAgentId: BUILTIN_QUICK_ANSWER_ID,
+    selectedAgentExplicit: true,
     selectedTags: [{ id: "t1", name: "Tag", kbId: "kb1" }],
   };
   store[SETTINGS_STORAGE_KEY] = JSON.stringify(stored);
@@ -150,4 +163,18 @@ test("loadAndReconcileSettings keeps valid stored settings", () => {
   assert.equal(loaded.isAgentEnabled, false);
   assert.equal(loaded.selectedTags.length, 1);
   assert.equal(loaded.selectedTags[0].id, "t1");
+});
+
+test("migrates the legacy quick-answer default to automatic routing", () => {
+  const store = installMockLocalStorage();
+  store[SETTINGS_STORAGE_KEY] = JSON.stringify({
+    isAgentEnabled: false,
+    selectedAgentId: BUILTIN_QUICK_ANSWER_ID,
+  });
+
+  const loaded = loadAndReconcileSettings(makeDefaults());
+
+  assert.equal(loaded.selectedAgentId, "");
+  assert.equal(loaded.selectedAgentExplicit, false);
+  assert.equal(JSON.parse(store[SETTINGS_STORAGE_KEY]).selectedAgentId, "");
 });

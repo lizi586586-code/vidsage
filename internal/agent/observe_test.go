@@ -128,6 +128,25 @@ func TestAnalyzeResponse_NaturalStop_Terminates(t *testing.T) {
 	}
 }
 
+func TestAnalyzeResponse_AnswerContractRendersBlocks(t *testing.T) {
+	engine := newTestEngine(t, &mockChat{}, func(cfg *types.AgentConfig) {
+		cfg.AnswerContractEnabled = true
+	})
+	resp := &types.ChatResponse{
+		FinishReason: "stop",
+		Content:      `<think>先定位两期视频的收尾总结</think>{"schema_version":"answer_contract/v1","mode":"reasoning","coverage":"complete","content_markdown":"两期视频都有总结。","blocks":[{"type":"summary","title":"视频总结","text_markdown":"角色 + 任务 + 要求 + 格式。","evidence_refs":[]}]}`,
+	}
+
+	verdict := engine.analyzeResponse(
+		context.Background(), resp, types.AgentStep{}, 0, "sess-1", time.Now(),
+	)
+
+	require.True(t, verdict.isDone)
+	require.NoError(t, verdict.contractErr)
+	require.Contains(t, verdict.finalAnswer, "两期视频都有总结。")
+	require.Contains(t, verdict.finalAnswer, "角色 + 任务 + 要求 + 格式。")
+}
+
 // TestAppendToolResults_PreservesReasoningContent verifies that the assistant
 // message produced by appendToolResults carries the reasoning_content emitted
 // by the model in the same round. Without this, MiMo and DeepSeek V3.2+

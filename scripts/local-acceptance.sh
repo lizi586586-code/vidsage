@@ -16,6 +16,10 @@ ACCEPTANCE_URL="${LOCAL_ACCEPTANCE_URL:-http://127.0.0.1/platform/videos}"
 BACKEND_CONTAINER="${LOCAL_ACCEPTANCE_BACKEND_CONTAINER:-vidsage-custom-backend}"
 FRONTEND_CONTAINER="${LOCAL_ACCEPTANCE_FRONTEND_CONTAINER:-WeKnora-frontend}"
 FRONTEND_IMAGE="${LOCAL_ACCEPTANCE_FRONTEND_IMAGE:-weknora/vidsage-ui:local-acceptance}"
+APP_IMAGE="${LOCAL_ACCEPTANCE_APP_IMAGE:-weknora/weknora-app:local-acceptance}"
+APP_CONTAINER="${LOCAL_ACCEPTANCE_APP_CONTAINER:-WeKnora-app}"
+AGENT_SYNC_FILE="${LOCAL_ACCEPTANCE_AGENT_SYNC_FILE:-$PROJECT_ROOT/config/vidsage_agent_sync.json}"
+AGENT_SYNC_ID="${LOCAL_ACCEPTANCE_AGENT_ID:-6f3691c2-8d15-48f8-b1f4-dfadd222ca53}"
 BACKEND_TARGET="${VITE_CUSTOM_BACKEND_TARGET:-http://127.0.0.1:${BACKEND_PORT}}"
 OFFICIAL_BACKEND_TARGET="${VITE_DEV_PROXY_TARGET:-${FRONTEND_BACKEND_URL:-http://127.0.0.1:8080}}"
 
@@ -49,6 +53,13 @@ die() {
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || die "未找到命令: $1"
+}
+
+require_jq() {
+    require_command jq
+    [ -r "$AGENT_SYNC_FILE" ] || die "Agent 同步配置不可读取: $AGENT_SYNC_FILE"
+    jq -e 'type == "object" and (.agent_mode | type == "string") and (.max_iterations | type == "number") and (.llm_call_timeout | type == "number") and (.selected_skills | type == "array") and (.allowed_tools | type == "array")' "$AGENT_SYNC_FILE" >/dev/null \
+        || die "Agent 同步配置格式无效: $AGENT_SYNC_FILE"
 }
 
 require_docker() {
@@ -133,6 +144,52 @@ wait_for_container_http() {
     return 1
 }
 
+sync_agent_config() {
+    require_jq
+    [[ "$AGENT_SYNC_ID" =~ ^[A-Za-z0-9_-]+$ ]] || die "Agent ID 格式无效: $AGENT_SYNC_ID"
+    local config_json
+    config_json="$(jq -c . "$AGENT_SYNC_FILE")"
+    docker exec -i WeKnora-postgres psql -v ON_ERROR_STOP=1 -U "${DB_USER:-postgres}" -d "${DB_NAME:-WeKnora}" \
+        -v agent_id="$AGENT_SYNC_ID" -v agent_config="$config_json" <<'SQL'
+UPDATE custom_agents
+SET config = config || :'agent_config'::jsonb,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = :'agent_id';
+SQL
+    local summary
+    summary="$(docker exec -i WeKnora-postgres psql -At -U "${DB_USER:-postgres}" -d "${DB_NAME:-WeKnora}" \
+        -c "SELECT id || '|' || (config->>'agent_mode') || '|' || (config->>'max_iterations') || '|' || (config->>'llm_call_timeout') || '|' || jsonb_array_length(COALESCE(config->'selected_skills','[]'::jsonb)) || '|' || jsonb_array_length(COALESCE(config->'allowed_tools','[]'::jsonb)) FROM custom_agents WHERE id = '${AGENT_SYNC_ID}';")"
+    [ -n "$summary" ] || die "数据库中不存在 Agent: $AGENT_SYNC_ID"
+    printf '[INFO] 已同步 Agent 配置: %s\n' "$summary"
+}
+
+assert_agent_config() {
+    require_jq
+    local expected actual
+    expected="$(jq -r '[.agent_mode, .agent_type, .model_id, (.max_iterations|tostring), (.llm_call_timeout|tostring), (.selected_skills|length|tostring), (.allowed_tools|length|tostring)] | join("|")' "$AGENT_SYNC_FILE")"
+    actual="$(docker exec -i WeKnora-postgres psql -At -U "${DB_USER:-postgres}" -d "${DB_NAME:-WeKnora}" \
+        -c "SELECT (config->>'agent_mode') || '|' || (config->>'agent_type') || '|' || (config->>'model_id') || '|' || (config->>'max_iterations') || '|' || (config->>'llm_call_timeout') || '|' || jsonb_array_length(COALESCE(config->'selected_skills','[]'::jsonb)) || '|' || jsonb_array_length(COALESCE(config->'allowed_tools','[]'::jsonb)) FROM custom_agents WHERE id = '${AGENT_SYNC_ID}';")"
+    [ "$actual" = "$expected" ] || die "数据库 Agent 配置与声明文件不一致: expected=$expected actual=$actual"
+}
+
+build_and_start_app() {
+    local previous_image rollback_tag
+    previous_image="$(docker inspect -f '{{.Config.Image}}' "$APP_CONTAINER" 2>/dev/null || true)"
+    rollback_tag="weknora/weknora-app:rollback-$(date +%Y%m%d%H%M%S)"
+    if [ -n "$previous_image" ]; then
+        docker tag "$previous_image" "$rollback_tag"
+        printf '[INFO] App 回滚镜像: %s\n' "$rollback_tag"
+    fi
+    if container_exists "$APP_CONTAINER"; then
+        docker rm -f "$APP_CONTAINER" >/dev/null
+    fi
+    LOCAL_ACCEPTANCE_APP_IMAGE="$APP_IMAGE" compose build app
+    LOCAL_ACCEPTANCE_APP_IMAGE="$APP_IMAGE" compose up -d app
+    wait_for_container_health "$APP_CONTAINER" 120 || die '当前源码 WeKnora-app 未就绪'
+    wait_for_container_http "$APP_CONTAINER" http://127.0.0.1:8080/health 10 || die '当前源码 WeKnora-app 健康检查失败'
+    printf '[INFO] 已启动当前源码 App: image=%s started=%s\n' "$APP_IMAGE" "$(docker inspect -f '{{.State.StartedAt}}' "$APP_CONTAINER")"
+}
+
 start_backend() {
     load_tencent_mps_credentials
     if container_exists "$BACKEND_CONTAINER"; then
@@ -146,11 +203,12 @@ start_backend() {
     ensure_official_container WeKnora-redis redis
     ensure_official_container WeKnora-docreader docreader
     ensure_official_container WeKnora-minio minio
-    ensure_official_container WeKnora-app app
     wait_for_container_health WeKnora-postgres 90 || die '官方 PostgreSQL 未就绪'
     wait_for_container_health WeKnora-minio 90 || die '官方 MinIO 未就绪'
     wait_for_container_health WeKnora-docreader 90 || die '官方 docreader 未就绪'
-    wait_for_container_http WeKnora-app http://127.0.0.1:8080/health 90 || die '官方 WeKnora app 未就绪'
+    sync_agent_config
+    build_and_start_app
+    assert_agent_config
     compose up -d --build custom-backend
     assert_mps_runtime_config
 }
@@ -270,6 +328,7 @@ restart() {
 status() {
     require_docker
     docker ps -a --filter "name=^/${BACKEND_CONTAINER}$" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+    docker ps -a --filter "name=^/${APP_CONTAINER}$" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
     if pid_is_running "$FRONTEND_PID_FILE"; then
         printf 'frontend: running (PID=%s)\n' "$(cat "$FRONTEND_PID_FILE")"
     elif wait_for_http "$ACCEPTANCE_URL" 3; then
@@ -288,6 +347,13 @@ status() {
         else
             printf 'tencent-mps: missing runtime configuration\n'
         fi
+    fi
+    if container_exists "$APP_CONTAINER"; then
+        printf 'app-image: %s\n' "$(docker inspect -f '{{.Config.Image}}' "$APP_CONTAINER")"
+        printf 'app-started: %s\n' "$(docker inspect -f '{{.State.StartedAt}}' "$APP_CONTAINER")"
+        printf 'app-config-hashes:\n'
+        docker exec "$APP_CONTAINER" sha256sum /app/config/builtin_agents.yaml /app/config/prompt_templates/agent_system_prompt.yaml
+        assert_agent_config
     fi
 }
 

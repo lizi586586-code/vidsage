@@ -1,4 +1,5 @@
 import { safeRemoveItem, safeSetItem } from "@/composables/preferenceStorage";
+import { BUILTIN_QUICK_ANSWER_ID } from "@/api/agent";
 import { reconcileBuiltinAgentMode } from "@/utils/agent-mode";
 
 export const SETTINGS_STORAGE_KEY = "WeKnora_settings";
@@ -23,6 +24,7 @@ type ReconcilableSettings = {
   enableMemory?: unknown;
   isAgentEnabled: boolean;
   selectedAgentId?: string;
+  selectedAgentExplicit?: boolean;
 };
 
 function reconcileLoadedSettings<T extends ReconcilableSettings>(loaded: T): T {
@@ -34,8 +36,14 @@ function reconcileLoadedSettings<T extends ReconcilableSettings>(loaded: T): T {
   if (removedLegacyMemorySetting) {
     delete loaded.enableMemory;
   }
+  const migratedLegacyQuickAnswerDefault = loaded.selectedAgentExplicit === undefined
+    && loaded.selectedAgentId === BUILTIN_QUICK_ANSWER_ID;
+  if (migratedLegacyQuickAnswerDefault) {
+    loaded.selectedAgentId = "";
+    loaded.selectedAgentExplicit = false;
+  }
   const reconciledAgentMode = reconcileBuiltinAgentMode(loaded);
-  if (removedLegacyMemorySetting || reconciledAgentMode) {
+  if (removedLegacyMemorySetting || migratedLegacyQuickAnswerDefault || reconciledAgentMode) {
     safeSetItem(SETTINGS_STORAGE_KEY, JSON.stringify(loaded));
   }
   return loaded;

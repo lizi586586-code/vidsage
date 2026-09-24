@@ -104,12 +104,16 @@ func (s *sessionService) resolveChatModelID(
 
 	if customAgent != nil {
 		configuredModelID := strings.TrimSpace(customAgent.Config.ModelID)
-		if configuredModelID == "" {
+		// Built-in agents intentionally inherit the request/knowledge-base
+		// model. User-created agents must continue to declare their own model.
+		if configuredModelID == "" && !customAgent.IsBuiltin {
 			return "", fmt.Errorf("chat model is not configured: please set model_id on agent %s", customAgent.ID)
 		}
-		model, err := s.modelService.GetModelByID(ctx, configuredModelID)
-		if err != nil || model == nil || model.Type != types.ModelTypeKnowledgeQA {
-			return "", fmt.Errorf("configured chat model %s is unavailable for agent %s", configuredModelID, customAgent.ID)
+		if configuredModelID != "" {
+			model, err := s.modelService.GetModelByID(ctx, configuredModelID)
+			if err != nil || model == nil || model.Type != types.ModelTypeKnowledgeQA {
+				return "", fmt.Errorf("configured chat model %s is unavailable for agent %s", configuredModelID, customAgent.ID)
+			}
 		}
 	}
 
@@ -190,6 +194,7 @@ func (s *sessionService) applyAgentOverridesToChatManage(
 	// always receive a value.
 	cm.SummaryConfig.Thinking = customAgent.Config.Thinking
 	cm.CitationEnabled = customAgent.Config.CitationEnabled
+	cm.VideoEvidenceCitation = customAgent.Config.VideoEvidenceCitation
 	if customAgent.Config.Thinking != nil {
 		logger.Infof(ctx, "Using custom agent's thinking: %v", *customAgent.Config.Thinking)
 	} else {

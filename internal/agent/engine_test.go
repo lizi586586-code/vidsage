@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -44,13 +45,14 @@ type mockChat struct {
 	mu        sync.Mutex
 	responses []mockResponse
 	calls     [][]chat.Message
+	options   []*chat.ChatOptions
 	callCount int
 }
 
 func (m *mockChat) ChatStream(
 	_ context.Context,
 	messages []chat.Message,
-	_ *chat.ChatOptions,
+	opts *chat.ChatOptions,
 ) (<-chan types.StreamResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -59,6 +61,12 @@ func (m *mockChat) ChatStream(
 	}
 	resp := m.responses[m.callCount]
 	m.calls = append(m.calls, append([]chat.Message(nil), messages...))
+	if opts != nil {
+		copyOpts := *opts
+		m.options = append(m.options, &copyOpts)
+	} else {
+		m.options = append(m.options, nil)
+	}
 	m.callCount++
 	if resp.err != nil {
 		return nil, resp.err
@@ -243,6 +251,12 @@ func withMaxIterations(n int) testEngineOption {
 	}
 }
 
+func withMaxCompletionTokens(n int) testEngineOption {
+	return func(cfg *types.AgentConfig) {
+		cfg.MaxCompletionTokens = n
+	}
+}
+
 func withCitationsEnabled(enabled bool) testEngineOption {
 	return func(cfg *types.AgentConfig) {
 		cfg.CitationEnabled = &enabled
@@ -258,6 +272,42 @@ func TestBuildSystemPromptUsesInternalCitationSetting(t *testing.T) {
 	prompt := disabledEngine.buildSystemPrompt(context.Background())
 	require.Contains(t, prompt, "Source citations are disabled")
 	require.NotContains(t, prompt, "Source citations are enabled")
+}
+
+func TestStreamThinkingUsesConfiguredMaxCompletionTokens(t *testing.T) {
+	model := &mockChat{responses: []mockResponse{{chunks: []types.StreamResponse{
+		{Content: "answer", Done: true, FinishReason: "stop"},
+	}}}}
+	engine := newTestEngine(t, model, withMaxCompletionTokens(8192))
+
+	_, err := engine.streamThinkingToEventBus(context.Background(), emptyMessages(), nil, 0, "sess-1")
+	require.NoError(t, err)
+	require.Len(t, model.options, 1)
+	require.Equal(t, 8192, model.options[0].MaxCompletionTokens)
+}
+
+func TestFinalAnswerSynthesisUsesConfiguredMaxCompletionTokens(t *testing.T) {
+	model := &mockChat{responses: []mockResponse{{chunks: []types.StreamResponse{
+		{Content: "final answer", Done: true, FinishReason: "stop"},
+	}}}}
+	engine := newTestEngine(t, model, withMaxCompletionTokens(8192))
+	state := &types.AgentState{}
+
+	err := engine.streamFinalAnswerToEventBus(context.Background(), "test query", state, "sess-1")
+	require.NoError(t, err)
+	require.Len(t, model.options, 1)
+	require.Equal(t, 8192, model.options[0].MaxCompletionTokens)
+}
+
+func TestBuildSystemPromptInjectsVideoEvidenceProtocolOnlyWhenDeclared(t *testing.T) {
+	declared := newTestEngine(t, &mockChat{})
+	declared.config.VideoEvidenceCitation = "v1"
+	prompt := declared.buildSystemPrompt(context.Background())
+	require.Contains(t, prompt, "video_evidence_citation/v1")
+	require.Equal(t, 1, strings.Count(prompt, "## Video evidence citation protocol"))
+
+	undeclared := newTestEngine(t, &mockChat{})
+	require.NotContains(t, undeclared.buildSystemPrompt(context.Background()), "video_evidence_citation/v1")
 }
 
 func newTestEngine(t *testing.T, chatModel chat.Chat, opts ...testEngineOption) *AgentEngine {
@@ -553,6 +603,28 @@ func TestExecuteLoop_EmptyNaturalStopIsFailedCompletion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "failed", state.CompletionStatus)
 	assert.Equal(t, "empty_response", state.CompletionFailureReason)
+}
+
+func TestExecuteLoop_TruncatedAnswerContractProducesVisibleFailure(t *testing.T) {
+	truncated := `{"schema_version":"answer_contract/v1","mode":"reasoning","coverage":"complete","content_markdown":"截断`
+	model := &mockChat{responses: []mockResponse{
+		{chunks: []types.StreamResponse{{Content: truncated, Done: true, FinishReason: "stop"}}},
+		{chunks: []types.StreamResponse{{Content: truncated, Done: true, FinishReason: "stop"}}},
+	}}
+	engine := newTestEngine(t, model)
+	engine.config.AnswerContractEnabled = true
+	engine.config.VideoEvidenceCitation = "v1"
+	state := &types.AgentState{}
+
+	_, err := engine.executeLoop(context.Background(), state, "test query",
+		emptyMessages(), emptyTools(), "sess-1", "msg-1")
+	require.NoError(t, err)
+	require.True(t, state.IsComplete)
+	require.Equal(t, "failed", state.CompletionStatus)
+	require.Equal(t, "answer_contract_truncated", state.CompletionFailureReason)
+	require.NotEmpty(t, state.FinalAnswer, "failed contract output must never persist as an empty answer")
+	require.Len(t, model.options, 2)
+	require.Contains(t, model.calls[1][len(model.calls[1])-1].Content, "blocks 最多 3 个")
 }
 
 func TestExecuteLoop_SynthesizedAnswerAfterLLMFailureRemainsFailed(t *testing.T) {

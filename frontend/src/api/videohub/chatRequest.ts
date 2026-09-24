@@ -4,10 +4,29 @@ export interface ChatRequestScope {
   scope: ChatScope
   agent_id?: string
   agent_enabled?: boolean
+  auto_route?: boolean
   agent_source_tenant_id?: string
   knowledge_base_ids: string[]
   knowledge_ids: string[]
   tenant_id?: string | number
+}
+
+/** Automatic routing is enabled only when the user has not selected an agent. */
+export function shouldAutoRoute(agentId?: string, agentExplicit = false): boolean {
+  return !agentExplicit && !String(agentId || '').trim()
+}
+
+/** Remove the server's configured fallback when the user chose auto-routing. */
+export function resolveChatScopeAgent<T extends {
+  agent_id?: string
+  agent_source_tenant_id?: string
+}>(
+  scope: T,
+  options: { agentId?: string; agentSourceTenantId?: string | null; autoRoute?: boolean },
+): T {
+  if (!options.autoRoute || options.agentId || options.agentSourceTenantId) return scope
+  const { agent_id: _agentId, agent_source_tenant_id: _sourceTenantId, ...autoScope } = scope
+  return autoScope as T
 }
 
 export function normalizeTenantId(value?: string | number | null): string {
@@ -21,6 +40,10 @@ export function buildChatRequest(
   fallbackTenantId?: string | number | null,
 ) {
   const tenantId = normalizeTenantId(scope.tenant_id) || normalizeTenantId(fallbackTenantId)
+  const sourceTenantId = normalizeTenantId(scope.agent_source_tenant_id)
+  const numericSourceTenantId = sourceTenantId && /^\d+$/.test(sourceTenantId)
+    ? Number(sourceTenantId)
+    : undefined
   return {
     headers: {
       'Content-Type': 'application/json',
@@ -34,8 +57,9 @@ export function buildChatRequest(
       // current video's active transcript generation.
       ...(scope.scope === 'video' || !scope.agent_id ? { knowledge_ids: scope.knowledge_ids } : {}),
       agent_enabled: scope.agent_enabled ?? Boolean(scope.agent_id),
+      auto_route: scope.auto_route ?? false,
       ...(scope.agent_id ? { agent_id: scope.agent_id } : {}),
-      ...(scope.agent_source_tenant_id ? { agent_source_tenant_id: scope.agent_source_tenant_id } : {}),
+      ...(numericSourceTenantId ? { agent_source_tenant_id: numericSourceTenantId } : {}),
       disable_title: true,
       channel: 'web',
     },

@@ -105,6 +105,44 @@ type KnowledgeChunk struct {
 	ChunkType   string `json:"chunk_type"`
 }
 
+// GetChunkByID resolves a retrieval chunk to its parent knowledge through
+// WeKnora's tenant-scoped read API.
+func (c *Client) GetChunkByID(ctx context.Context, chunkID string) (KnowledgeChunk, error) {
+	chunkID = strings.TrimSpace(chunkID)
+	if chunkID == "" {
+		return KnowledgeChunk{}, fmt.Errorf("weknora chunk id 不能为空")
+	}
+	u := fmt.Sprintf("%s/api/v1/chunks/by-id/%s", strings.TrimRight(c.baseURL, "/"), url.PathEscape(chunkID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return KnowledgeChunk{}, err
+	}
+	c.setHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return KnowledgeChunk{}, fmt.Errorf("weknora get chunk by id: %w", err)
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return KnowledgeChunk{}, fmt.Errorf("read weknora chunk by id: %w", readErr)
+	}
+	if resp.StatusCode >= 400 {
+		return KnowledgeChunk{}, fmt.Errorf("weknora get chunk by id status %d: %s", resp.StatusCode, string(body))
+	}
+	var out struct {
+		Success bool           `json:"success"`
+		Data    KnowledgeChunk `json:"data"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return KnowledgeChunk{}, fmt.Errorf("decode weknora chunk by id: %w", err)
+	}
+	if !out.Success || strings.TrimSpace(out.Data.ID) != chunkID || strings.TrimSpace(out.Data.KnowledgeID) == "" {
+		return KnowledgeChunk{}, fmt.Errorf("weknora chunk by id returned invalid source mapping")
+	}
+	return out.Data, nil
+}
+
 // JoinKnowledgeChunks reconstructs content split by WeKnora's recursive
 // splitter. The splitter may repeat its overlap at the start of the next
 // chunk; remove only the largest exact suffix/prefix overlap so structured

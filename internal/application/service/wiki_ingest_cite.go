@@ -40,13 +40,14 @@ type citationBatchResult struct {
 // WikiChunkCitationPrompt. Mirrors extractedItem but also carries a "type"
 // tag because this prompt emits entities and concepts in a single array.
 type newSlugFromCitation struct {
-	Type         string   `json:"type"`
-	Name         string   `json:"name"`
-	Slug         string   `json:"slug"`
-	Aliases      []string `json:"aliases"`
-	Description  string   `json:"description"`
-	Details      string   `json:"details"`
-	SourceChunks []string `json:"source_chunks"`
+	Type         string                `json:"type"`
+	Name         string                `json:"name"`
+	Slug         string                `json:"slug"`
+	Aliases      []string              `json:"aliases"`
+	Description  string                `json:"description"`
+	Details      string                `json:"details"`
+	Metadata     extractedItemMetadata `json:"metadata,omitempty"`
+	SourceChunks []string              `json:"source_chunks"`
 }
 
 // citationPipelineOutcome carries the raw numbers produced by the Pass
@@ -518,6 +519,7 @@ func mergeCitationsIntoItems(
 					Aliases:      append([]string(nil), ns.Aliases...),
 					Description:  ns.Description,
 					Details:      ns.Details,
+					Metadata:     ns.Metadata,
 					SourceChunks: append([]string(nil), ns.SourceChunks...),
 				},
 				typ: kind,

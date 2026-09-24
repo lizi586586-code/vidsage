@@ -286,7 +286,7 @@ func (e *AgentEngine) executeToolCallsParallel(
 				Success:    result.Success,
 				Duration:   toolCall.Duration,
 				Iteration:  iteration,
-				Data:       agenttools.SanitizeToolDataForPersist(toolCall.Name, result.Data),
+				Data:       result.Data,
 			},
 		})
 
@@ -332,7 +332,7 @@ func (e *AgentEngine) executeSingleToolCall(
 			Success:    result.Success,
 			Duration:   toolCall.Duration,
 			Iteration:  iteration,
-			Data:       agenttools.SanitizeToolDataForPersist(toolCall.Name, result.Data),
+			Data:       result.Data,
 		},
 	})
 

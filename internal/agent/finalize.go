@@ -12,6 +12,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 func finalAnswerImageRequirement(hasRetrievedImage bool) string {
@@ -72,8 +73,25 @@ func (e *AgentEngine) streamFinalAnswerToEventBus(
 		len(messages), toolResultCount)
 
 	imageRequirement := finalAnswerImageRequirement(hasRetrievedImage)
+	answerContractRequirement := ""
+	bufferFinalAnswer := false
+	if e.config != nil && videoevidence.Supports(e.config.VideoEvidenceCitation) {
+		if e.config.AnswerContractEnabled {
+			bufferFinalAnswer = true
+			answerContractRequirement = fmt.Sprintf(`
+8. Return exactly one JSON object that conforms to %s. Do not use Markdown fences, explanations, or trailing text.
+9. The object must contain: schema_version (exactly %q), mode (exactly %q for this agent), coverage (%q, %q, or %q), content_markdown (string), and blocks (array).
+10. Each block must contain only type, title, text_markdown, and evidence_refs. Block type must be exactly one of "summary", "topic", "comparison", "steps", or "evidence"; never use "video_evidence" or "answer". Use evidence_refs only for citation handles that appear in the block text as <ref id="cN"/>. Ordinary knowledge/Wiki cN handles may be cited for explanation, but they remain normal sources and never become video evidence; video locations require a validated transcript handle. Do not invent video IDs, titles, timestamps, evidence IDs, or links.`, videoevidence.AnswerContractVersion,
+				videoevidence.AnswerContractVersion, videoevidence.AnswerModeReasoning,
+				videoevidence.AnswerCoverageComplete, videoevidence.AnswerCoveragePartial, videoevidence.AnswerCoverageNone)
+		}
+	}
+	if e.config != nil && e.config.SkillUnavailable {
+		answerContractRequirement += `
+11. The video evidence Skill is unavailable. Do not claim that video evidence was fully retrieved; use partial or none coverage and state that the time is not verified.`
+	}
 
-	// Add final answer prompt
+	// Add final answer prompt.
 	finalPrompt := fmt.Sprintf(`Based on the above tool call results, generate a complete answer for the user's question.
 
 User question: %s
@@ -82,10 +100,11 @@ Requirements:
 1. Answer based on the actually retrieved content
 2. Organize the answer in a structured format
 3. If information is insufficient, honestly state so
-4. IMPORTANT: Respond in the same language as the user's question
+4. Respond in the same language as the user's question
+%s
 %s
 
-Now generate the final answer:`, query, imageRequirement)
+Now generate the final answer:`, query, imageRequirement, answerContractRequirement)
 
 	messages = append(messages, chat.Message{
 		Role:    "user",
@@ -100,8 +119,14 @@ Now generate the final answer:`, query, imageRequirement)
 	llmResult, err := e.streamLLMToEventBus(
 		ctx,
 		messages,
-		&chat.ChatOptions{Temperature: e.config.Temperature}, // Thinking disabled for final answer synthesis
+		&chat.ChatOptions{
+			Temperature:         e.config.Temperature,
+			MaxCompletionTokens: e.config.MaxCompletionTokens,
+		}, // Thinking disabled for final answer synthesis
 		func(chunk *types.StreamResponse, fullContent string) {
+			if bufferFinalAnswer {
+				return
+			}
 			// Defensive filter: only emit answer content, skip thinking chunks
 			if chunk.ResponseType == types.ResponseTypeThinking {
 				return
@@ -132,6 +157,38 @@ Now generate the final answer:`, query, imageRequirement)
 		return err
 	}
 
+	fullAnswer := agenttools.StripThinkBlocks(llmResult.Content)
+	if bufferFinalAnswer {
+		contract, err := videoevidence.ParseAnswerContract(fullAnswer)
+		if err != nil {
+			logger.Errorf(ctx, "[Agent][FinalAnswer] Answer contract validation failed: %v", err)
+			common.PipelineError(ctx, "Agent", "answer_contract_invalid", map[string]interface{}{
+				"session_id": sessionID,
+				"error_code": err.Error(),
+			})
+			return err
+		}
+		projection, err := e.projectAnswerContract(contract, state.KnowledgeRefs)
+		if err != nil {
+			logger.Errorf(ctx, "[Agent][FinalAnswer] Answer evidence projection failed: %v", err)
+			common.PipelineError(ctx, "Agent", "answer_contract_invalid", map[string]interface{}{
+				"session_id": sessionID,
+				"error_code": err.Error(),
+			})
+			return err
+		}
+		fullAnswer = e.modelContext.DecodeOutputText(projection.RenderedMarkdown)
+		e.eventBus.Emit(ctx, event.Event{
+			ID:        answerID,
+			Type:      event.EventAgentFinalAnswer,
+			SessionID: sessionID,
+			Data: event.AgentFinalAnswerData{
+				Content: fullAnswer,
+				Done:    true,
+			},
+		})
+		answerDoneEmitted = true
+	}
 	if !answerDoneEmitted {
 		e.eventBus.Emit(ctx, event.Event{
 			ID:        answerID,
@@ -145,7 +202,6 @@ Now generate the final answer:`, query, imageRequirement)
 	}
 
 	// Safety net: strip any residual <think> blocks that may have leaked through
-	fullAnswer := agenttools.StripThinkBlocks(llmResult.Content)
 	logger.Infof(ctx, "[Agent][FinalAnswer] Final answer generated: %d characters", len(fullAnswer))
 	common.PipelineInfo(ctx, "Agent", "final_answer_done", map[string]interface{}{
 		"session_id": sessionID,

@@ -111,3 +111,30 @@ func TestPrepareFallbackMessagesSuppressesCitationsWhenDisabled(t *testing.T) {
 	require.Equal(t, `Previous <ref id="c1"/>`, messages[2].Content)
 	require.Equal(t, "answer ", refs.DecodeOutputText(`answer <ref id="c1"/>`))
 }
+
+func TestPrepareFallbackMessagesInjectsVideoEvidenceProtocolOnlyWhenDeclared(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		capability string
+		contains   bool
+	}{
+		{name: "declared", capability: "v1", contains: true},
+		{name: "not declared", capability: "", contains: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cm := &types.ChatManage{
+				PipelineRequest: types.PipelineRequest{
+					Query:                 "follow-up",
+					VideoEvidenceCitation: tc.capability,
+				},
+			}
+
+			messages, _ := prepareFallbackMessages(cm, "fallback instruction")
+			if tc.contains {
+				require.Contains(t, messages[0].Content, "video_evidence_citation/v1")
+			} else {
+				require.NotContains(t, messages[0].Content, "video_evidence_citation/v1")
+			}
+		})
+	}
+}

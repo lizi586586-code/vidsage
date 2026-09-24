@@ -118,6 +118,23 @@ func TestMergeCitationsIntoItems_AddsNewSlugsAndUnionsChunksAcrossBatches(t *tes
 	}
 }
 
+func TestMergeCitationsIntoItems_PreservesCaseMetadataOnNewSlug(t *testing.T) {
+	_, concepts, _ := mergeCitationsIntoItems(nil, nil, nil, []newSlugFromCitation{
+		{
+			Type:     "concept",
+			Name:     "企业知识库实践",
+			Slug:     "concept/enterprise-knowledge-base-practice",
+			Metadata: extractedItemMetadata{SubType: wikiCaseSubType},
+		},
+	})
+	if len(concepts) != 1 {
+		t.Fatalf("expected one concept, got %d", len(concepts))
+	}
+	if !concepts[0].isCaseConcept() {
+		t.Fatalf("new concept metadata = %+v, want sub_type=case", concepts[0].Metadata)
+	}
+}
+
 // TestSplitChunksIntoCitationBatches_RespectsBudgetAndOrder verifies that the
 // batcher never puts too many runes in one batch, preserves document order,
 // and that an oversized chunk gets its own batch.

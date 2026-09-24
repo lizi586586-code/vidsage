@@ -49,6 +49,28 @@ func TestChatScopeGlobalReturnsConfiguredTenant(t *testing.T) {
 	}
 }
 
+func TestChatScopeGlobalIncludesKnowledgeAndEvidenceLayers(t *testing.T) {
+	db := openTestVideoDB(t)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/custom/chat/scope/global", nil)
+
+	NewChatScopeHandlerWithEvidence(db, "knowledge-kb", "evidence-kb", "agent-1", "10000").Global(context)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Data ChatScopeResponse `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, want := payload.Data.KnowledgeBaseIDs, []string{"knowledge-kb", "evidence-kb"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("knowledge_base_ids = %#v, want %#v", got, want)
+	}
+}
+
 func TestChatScopeVideoRejectsVideoWithoutRealKnowledge(t *testing.T) {
 	db := openTestVideoDB(t)
 	if err := db.AutoMigrate(&model.VideoTranscriptChunk{}); err != nil {
@@ -124,5 +146,44 @@ func TestChatScopeVideoReturnsCompletedTranscriptKnowledgeAndSourceMeta(t *testi
 	}
 	if payload.Data.SessionMeta["scope"] != "video" || payload.Data.SessionMeta["video_cover_url"] == "" {
 		t.Fatalf("session_meta = %#v", payload.Data.SessionMeta)
+	}
+}
+
+func TestChatScopeVideoIncludesEvidenceLayer(t *testing.T) {
+	db := openTestVideoDB(t)
+	if err := db.AutoMigrate(&model.VideoTranscriptChunk{}); err != nil {
+		t.Fatalf("migrate chunks: %v", err)
+	}
+	video := model.Video{
+		ID: uuid.NewString(), Title: "真实课程", Status: model.VideoStatusCompleted,
+		TranscriptGeneration: "generation-1",
+	}
+	if err := db.Create(&video).Error; err != nil {
+		t.Fatalf("create video: %v", err)
+	}
+	if err := db.Create(&model.VideoTranscriptChunk{
+		VideoID: video.ID, Generation: "generation-1", Revision: 1, ChunkIndex: 0,
+		StartMs: 0, EndMs: 1000, KnowledgeID: "knowledge-1", ContentHash: "a", Status: "completed",
+	}).Error; err != nil {
+		t.Fatalf("create chunk: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Params = gin.Params{{Key: "id", Value: video.ID}}
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/custom/videos/"+video.ID+"/chat-scope", nil)
+
+	NewChatScopeHandlerWithEvidence(db, "knowledge-kb", "evidence-kb", "agent-1", "10000").Video(context)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Data ChatScopeResponse `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, want := payload.Data.KnowledgeBaseIDs, []string{"knowledge-kb", "evidence-kb"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("knowledge_base_ids = %#v, want %#v", got, want)
 	}
 }

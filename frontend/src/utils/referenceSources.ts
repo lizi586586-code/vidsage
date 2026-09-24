@@ -1,3 +1,5 @@
+import type { VideoEvidence } from '@/types/videohub'
+
 export type ReferenceItemKind = 'web' | 'document' | 'tool'
 
 export type KnowledgeReferenceLike = {
@@ -11,6 +13,7 @@ export type KnowledgeReferenceLike = {
   chunk_type?: string
   content?: string
   metadata?: Record<string, string>
+  video_evidence?: VideoEvidence
 }
 
 export type ReferenceListItem = {

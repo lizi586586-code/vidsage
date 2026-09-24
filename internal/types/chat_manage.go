@@ -32,6 +32,9 @@ type PipelineRequest struct {
 	// CitationEnabled controls only final knowledge/web source citations. Nil
 	// defaults to true for requests and agents created before this option existed.
 	CitationEnabled *bool `json:"citation_enabled,omitempty"`
+	// VideoEvidenceCitation is the versioned capability declaration for
+	// clickable video evidence. Empty keeps the ordinary citation behavior.
+	VideoEvidenceCitation string `json:"video_evidence_citation,omitempty"`
 
 	// Rewrite parameters
 	EnableRewrite        bool   `json:"enable_rewrite"`

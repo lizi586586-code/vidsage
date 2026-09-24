@@ -77,7 +77,7 @@ const fileName = computed(() => props.item.file_name || props.item.title || prop
     :confirm-btn="{ content: $t('common.confirm'), theme: 'primary' }"
     :cancel-btn="{ content: $t('common.cancel') }" placement="left"
     @confirm="emit('reparse')">
-    <div class="doc-action-menu-item" @click.stop>
+    <div class="doc-action-menu-item">
       <t-icon class="icon" name="refresh" />
       <span>{{ $t('knowledgeBase.rebuildDocument') }}</span>
     </div>
@@ -89,7 +89,7 @@ const fileName = computed(() => props.item.file_name || props.item.title || prop
     :confirm-btn="{ content: $t('knowledgeBase.cancelParse'), theme: 'danger' }"
     :cancel-btn="{ content: $t('common.cancel') }" placement="left"
     @confirm="emit('cancel-parse')">
-    <div class="doc-action-menu-item danger" @click.stop>
+    <div class="doc-action-menu-item danger">
       <t-icon class="icon" name="close-circle" />
       <span>{{ $t('knowledgeBase.cancelParse') }}</span>
     </div>

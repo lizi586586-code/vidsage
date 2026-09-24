@@ -233,12 +233,57 @@ export interface VideoProcessingStatus {
   updated_at: string
 }
 
+export interface VideoEvidence {
+  knowledgeId?: string
+  videoId: string
+  videoTitle: string
+  videoCoverUrl?: string
+  startMs: number
+  endMs: number
+  startSeconds: number
+  endSeconds: number
+  startTimestamp: string
+  endTimestamp: string
+  evidenceSentenceId: string
+  transcriptGeneration: string
+  sourceType: 'transcript'
+  linkable: boolean
+}
+
+export interface WikiFallback {
+  pageId: string
+  slug: string
+  title: string
+  knowledgeBaseId: string
+  linkable: boolean
+}
+
+export interface ChatKnowledgeReference {
+  id?: string
+  chunk_ids?: string[]
+  knowledge_id?: string
+  knowledge_title?: string
+  knowledge_filename?: string
+  knowledge_base_id?: string
+  chunk_index?: number
+  chunk_type?: string
+  content?: string
+  metadata?: Record<string, string>
+  video_evidence?: VideoEvidence
+  wiki_fallback?: WikiFallback
+  video_evidence_unavailable?: boolean
+}
+
 export interface EvidenceLink {
   label: string
   timestamp: string
   seconds: number
+  endSeconds?: number
+  startMs?: number
+  endMs?: number
   videoId?: string
   videoTitle?: string
+  videoEvidence?: VideoEvidence
 }
 
 export interface ChatMessage {
@@ -250,6 +295,10 @@ export interface ChatMessage {
   relatedTime?: number
   relatedVideoTitle?: string
   evidenceLinks?: EvidenceLink[]
+  knowledge_references?: ChatKnowledgeReference[]
+  route_mode?: 'quick' | 'reasoning'
+  coverage?: 'complete' | 'partial' | 'none'
+  video_evidence?: VideoEvidence[]
 }
 
 export interface ChatSession {

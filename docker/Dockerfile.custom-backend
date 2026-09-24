@@ -45,6 +45,7 @@ COPY internal/storageallowlist ./internal/storageallowlist
 COPY internal/tracing ./internal/tracing
 COPY internal/types ./internal/types
 COPY internal/utils ./internal/utils
+COPY internal/videoevidence ./internal/videoevidence
 # P3 knowledge rules are read at runtime by the custom backend. Keep the
 # bundled skill copy in the image for deployments without the source checkout.
 COPY skills/preloaded ./skills/preloaded

@@ -1,6 +1,41 @@
 # 固定验收编排：
 # 复用官方 WeKnora Compose 已运行的真实数据服务，只单独构建当前 custom-backend。
 services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app.local-acceptance
+    image: ${LOCAL_ACCEPTANCE_APP_IMAGE:-weknora/weknora-app:local-acceptance}
+    container_name: WeKnora-app
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    env_file:
+      - .env
+    environment:
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_NAME: ${DB_NAME:-WeKnora}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      DOCREADER_ADDR: ${DOCREADER_ADDR:-docreader:50051}
+      AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
+    volumes:
+      - weknora-data-files:/data/files
+      - weknora-docreader-tmp:/tmp/docreader:ro
+      - ./config/config.yaml:/app/config/config.yaml
+      - ./config/builtin_models.yaml:/app/config/builtin_models.yaml:ro
+      - ./skills/preloaded:/app/skills/preloaded
+    networks:
+      - acceptance-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
   custom-db-init:
     image: paradedb/paradedb:v0.22.2-pg17
     container_name: vidsage-custom-db-init-acceptance
@@ -146,3 +181,11 @@ networks:
   acceptance-network:
     name: ${LOCAL_ACCEPTANCE_OFFICIAL_NETWORK:-weknora_WeKnora-network}
     external: true
+
+volumes:
+  weknora-data-files:
+    external: true
+    name: ${LOCAL_ACCEPTANCE_DATA_VOLUME:-weknora_data-files}
+  weknora-docreader-tmp:
+    external: true
+    name: ${LOCAL_ACCEPTANCE_DOCREADER_VOLUME:-weknora_docreader-tmp}

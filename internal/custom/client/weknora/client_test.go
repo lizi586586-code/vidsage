@@ -241,6 +241,33 @@ func TestListKnowledgeChunksReadsAllPagesAndPreservesChunkFields(t *testing.T) {
 	}
 }
 
+func TestGetChunkByIDUsesTenantScopedReadEndpoint(t *testing.T) {
+	client := New(config.WeKnoraConfig{BaseURL: "http://weknora.test", APIKey: "secret", TenantID: "tenant-1"})
+	client.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/chunks/by-id/chunk-1" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("X-API-Key") != "secret" || r.Header.Get("X-Tenant-ID") != "tenant-1" {
+			t.Fatalf("headers missing: %#v", r.Header)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body: io.NopCloser(strings.NewReader(
+				`{"success":true,"data":{"id":"chunk-1","knowledge_id":"knowledge-1","content":"原文"}}`,
+			)),
+			Header: make(http.Header),
+		}, nil
+	})}
+
+	chunk, err := client.GetChunkByID(context.Background(), "chunk-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chunk.ID != "chunk-1" || chunk.KnowledgeID != "knowledge-1" {
+		t.Fatalf("chunk = %#v", chunk)
+	}
+}
+
 func TestJoinKnowledgeChunksRemovesSplitterOverlap(t *testing.T) {
 	chunks := []KnowledgeChunk{
 		{ChunkIndex: 0, Content: "prefix abc"},

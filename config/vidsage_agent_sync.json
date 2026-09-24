@@ -1,0 +1,40 @@
+{
+  "agent_mode": "smart-reasoning",
+  "agent_type": "hybrid-rag-wiki",
+  "model_id": "builtin-llm-deepseek",
+  "max_iterations": 40,
+  "llm_call_timeout": 300,
+  "selected_skills": [
+    "assemble-transcript-page",
+    "extract-video-knowledge",
+    "generate-transcript-outline",
+    "generate-typed-transcript-summary",
+    "retrieve-from-timeline",
+    "summarize-transcript-content",
+    "引用生成器",
+    "数据处理器",
+    "文档协作",
+    "文档分析器"
+  ],
+  "allowed_tools": [
+    "wiki_search",
+    "wiki_read_page",
+    "knowledge_search",
+    "grep_chunks",
+    "list_knowledge_chunks",
+    "get_document_info",
+    "wiki_flag_issue",
+    "query_knowledge_graph",
+    "wiki_read_source_doc",
+    "wiki_write_page",
+    "wiki_rename_page",
+    "wiki_replace_text",
+    "wiki_delete_page",
+    "wiki_read_issue",
+    "wiki_update_issue",
+    "thinking",
+    "todo_write",
+    "data_analysis",
+    "data_schema"
+  ]
+}

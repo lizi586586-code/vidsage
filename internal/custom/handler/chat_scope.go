@@ -10,10 +10,11 @@ import (
 )
 
 type ChatScopeHandler struct {
-	db       *gorm.DB
-	kbID     string
-	agentID  string
-	tenantID string
+	db            *gorm.DB
+	knowledgeKBID string
+	evidenceKBID  string
+	agentID       string
+	tenantID      string
 }
 
 type ChatScopeResponse struct {
@@ -29,12 +30,36 @@ type ChatScopeResponse struct {
 }
 
 func NewChatScopeHandler(db *gorm.DB, kbID, agentID, tenantID string) *ChatScopeHandler {
+	return NewChatScopeHandlerWithEvidence(db, kbID, "", agentID, tenantID)
+}
+
+// NewChatScopeHandlerWithEvidence binds both layers used by video Q&A:
+// knowledge-layer documents for context and evidence-layer transcripts for
+// clickable video locations.
+func NewChatScopeHandlerWithEvidence(db *gorm.DB, knowledgeKBID, evidenceKBID, agentID, tenantID string) *ChatScopeHandler {
 	return &ChatScopeHandler{
-		db:       db,
-		kbID:     strings.TrimSpace(kbID),
-		agentID:  strings.TrimSpace(agentID),
-		tenantID: strings.TrimSpace(tenantID),
+		db:            db,
+		knowledgeKBID: strings.TrimSpace(knowledgeKBID),
+		evidenceKBID:  strings.TrimSpace(evidenceKBID),
+		agentID:       strings.TrimSpace(agentID),
+		tenantID:      strings.TrimSpace(tenantID),
 	}
+}
+
+func (h *ChatScopeHandler) knowledgeBaseIDs() []string {
+	ids := make([]string, 0, 2)
+	seen := make(map[string]struct{}, 2)
+	for _, id := range []string{h.knowledgeKBID, h.evidenceKBID} {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func (h *ChatScopeHandler) sessionMeta(values map[string]string) map[string]string {
@@ -45,7 +70,8 @@ func (h *ChatScopeHandler) sessionMeta(values map[string]string) map[string]stri
 }
 
 func (h *ChatScopeHandler) Global(c *gin.Context) {
-	if h.kbID == "" {
+	kbIDs := h.knowledgeBaseIDs()
+	if len(kbIDs) == 0 {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "global video knowledge base is not configured"})
 		return
 	}
@@ -53,7 +79,7 @@ func (h *ChatScopeHandler) Global(c *gin.Context) {
 		Scope:            "global",
 		AgentID:          h.agentID,
 		TenantID:         h.tenantID,
-		KnowledgeBaseIDs: []string{h.kbID},
+		KnowledgeBaseIDs: kbIDs,
 		KnowledgeIDs:     []string{},
 		SessionMeta: h.sessionMeta(map[string]string{
 			"scope": "global",
@@ -67,7 +93,8 @@ func (h *ChatScopeHandler) Video(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "video id is required"})
 		return
 	}
-	if h.kbID == "" {
+	kbIDs := h.knowledgeBaseIDs()
+	if len(kbIDs) == 0 {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "global video knowledge base is not configured"})
 		return
 	}
@@ -95,7 +122,7 @@ func (h *ChatScopeHandler) Video(c *gin.Context) {
 		VideoCoverURL:    video.ThumbnailURL,
 		AgentID:          h.agentID,
 		TenantID:         h.tenantID,
-		KnowledgeBaseIDs: []string{h.kbID},
+		KnowledgeBaseIDs: kbIDs,
 		KnowledgeIDs:     knowledgeIDs,
 		SessionMeta: h.sessionMeta(map[string]string{
 			"scope":           "video",

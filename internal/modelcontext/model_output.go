@@ -154,23 +154,24 @@ func (r *sourceRegistry) modelDocumentInfoOutput(rows []map[string]interface{}, 
 }
 
 type modelChunk struct {
-	handle     string
-	docHandle  string
-	kbHandle   string
-	title      string
-	metadata   string
-	chunkType  string
-	index      int
-	view       string
-	match      string
-	content    string
-	question   string
-	answers    []string
-	images     []map[string]interface{}
-	docRealID  string
-	kbRealID   string
-	chunkReal  string
-	inputOrder int
+	handle        string
+	docHandle     string
+	kbHandle      string
+	title         string
+	metadata      string
+	videoEvidence bool
+	chunkType     string
+	index         int
+	view          string
+	match         string
+	content       string
+	question      string
+	answers       []string
+	images        []map[string]interface{}
+	docRealID     string
+	kbRealID      string
+	chunkReal     string
+	inputOrder    int
 }
 
 func (r *sourceRegistry) modelKnowledgeOutput(mode string, rows []map[string]interface{}, fallback string) string {
@@ -200,23 +201,24 @@ func (r *sourceRegistry) modelKnowledgeOutput(mode string, rows []map[string]int
 			ChunkType:       chunkType,
 		})
 		chunks = append(chunks, modelChunk{
-			handle:     chunkHandle,
-			docHandle:  r.RegisterDocument(knowledgeID),
-			kbHandle:   r.RegisterKnowledgeBase(kbID),
-			title:      title,
-			metadata:   stringValue(row, "knowledge_metadata"),
-			chunkType:  chunkType,
-			index:      chunkIndex,
-			view:       viewForRow(row, mode),
-			match:      firstNonEmpty(stringValue(row, "match_snippet"), stringValue(row, "matched_content")),
-			content:    stringValue(row, "content"),
-			question:   firstNonEmpty(stringValue(row, "faq_question"), stringValue(row, "faq_standard_question")),
-			answers:    stringSliceValue(row["faq_answers"]),
-			images:     mapsValue(row["images"]),
-			docRealID:  knowledgeID,
-			kbRealID:   kbID,
-			chunkReal:  chunkID,
-			inputOrder: idx,
+			handle:        chunkHandle,
+			docHandle:     r.RegisterDocument(knowledgeID),
+			kbHandle:      r.RegisterKnowledgeBase(kbID),
+			title:         title,
+			metadata:      stringValue(row, "knowledge_metadata"),
+			videoEvidence: hasVideoEvidenceMetadata(row),
+			chunkType:     chunkType,
+			index:         chunkIndex,
+			view:          viewForRow(row, mode),
+			match:         firstNonEmpty(stringValue(row, "match_snippet"), stringValue(row, "matched_content")),
+			content:       stringValue(row, "content"),
+			question:      firstNonEmpty(stringValue(row, "faq_question"), stringValue(row, "faq_standard_question")),
+			answers:       stringSliceValue(row["faq_answers"]),
+			images:        mapsValue(row["images"]),
+			docRealID:     knowledgeID,
+			kbRealID:      kbID,
+			chunkReal:     chunkID,
+			inputOrder:    idx,
 		})
 	}
 	if len(chunks) == 0 {
@@ -314,6 +316,9 @@ func renderKnowledgeChunks(mode string, chunks []modelChunk) string {
 				fmt.Fprintf(&b, " type=\"%s\"", escapeAttr(chunk.chunkType))
 			}
 			b.WriteString(">\n")
+			if chunk.videoEvidence && chunk.handle != "" {
+				fmt.Fprintf(&b, "      <evidence type=\"video_transcript\" citation=\"%s\" />\n", escapeAttr(chunk.handle))
+			}
 			if chunk.question != "" {
 				fmt.Fprintf(&b, "      <question>%s</question>\n", escapeText(chunk.question))
 			}
@@ -340,6 +345,37 @@ func renderKnowledgeChunks(mode string, chunks []modelChunk) string {
 	}
 	b.WriteString("</retrieval>")
 	return b.String()
+}
+
+func hasVideoEvidenceMetadata(row map[string]interface{}) bool {
+	switch strings.ToLower(strings.TrimSpace(stringValue(row, "chunk_type"))) {
+	case "summary", "wiki", "wiki_page", "entity", "relationship", "table_summary":
+		return false
+	}
+	metadata := mapsValueAsStrings(row["metadata"])
+	return metadata["source_type"] == "transcript" &&
+		metadata["evidence_sentence_id"] != "" &&
+		metadata["video_id"] != "" &&
+		metadata["start_ms"] != "" &&
+		metadata["end_ms"] != "" &&
+		metadata["transcript_generation"] != ""
+}
+
+func mapsValueAsStrings(value interface{}) map[string]string {
+	result := make(map[string]string)
+	switch typed := value.(type) {
+	case map[string]string:
+		for key, item := range typed {
+			result[key] = item
+		}
+	case map[string]interface{}:
+		for key, item := range typed {
+			if item != nil {
+				result[key] = fmt.Sprint(item)
+			}
+		}
+	}
+	return result
 }
 
 func (r *sourceRegistry) modelWebSearchOutput(rows []map[string]interface{}, fallback string) string {

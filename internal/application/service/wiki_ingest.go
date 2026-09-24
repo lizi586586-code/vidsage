@@ -2055,12 +2055,29 @@ func (s *wikiIngestService) getExistingPageSlugsForKnowledge(ctx context.Context
 // non-empty the Reduce phase uses these chunks verbatim as the item's
 // evidence instead of the shorter Description/Details fields.
 type extractedItem struct {
-	Name         string   `json:"name"`
-	Slug         string   `json:"slug"`
-	Aliases      []string `json:"aliases"`
-	Description  string   `json:"description"`
-	Details      string   `json:"details"`
-	SourceChunks []string `json:"source_chunks,omitempty"`
+	Name         string                `json:"name"`
+	Slug         string                `json:"slug"`
+	Aliases      []string              `json:"aliases"`
+	Description  string                `json:"description"`
+	Details      string                `json:"details"`
+	Metadata     extractedItemMetadata `json:"metadata,omitempty"`
+	SourceChunks []string              `json:"source_chunks,omitempty"`
+}
+
+// extractedItemMetadata carries the only supported native Wiki secondary
+// classification. It is intentionally narrow so arbitrary model metadata
+// cannot leak into page_metadata without a contract.
+type extractedItemMetadata struct {
+	SubType string `json:"sub_type,omitempty"`
+}
+
+const (
+	wikiCaseSubType        = "case"
+	wikiCaseSubTypeVersion = "v1"
+)
+
+func (item extractedItem) isCaseConcept() bool {
+	return strings.EqualFold(strings.TrimSpace(item.Metadata.SubType), wikiCaseSubType)
 }
 
 // combinedExtraction represents the parsed result of the combined entity+concept extraction

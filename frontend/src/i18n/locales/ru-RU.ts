@@ -6359,5 +6359,14 @@ export default {
     myChats: 'Мои чаты',
     apiChats: 'Сессии API',
     noSessions: 'Пока нет диалогов'
+  },
+  videohub: {
+    agentPicker: {
+      title: 'Агент',
+      autoRoute: 'Автомаршрутизация',
+      quickAnswer: 'Быстрый ответ',
+      customAgent: 'Пользовательское рассуждение',
+      fetchFailed: 'Не удалось загрузить данные агента, отображается имя по умолчанию'
+    }
   }
 }

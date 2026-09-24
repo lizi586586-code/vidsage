@@ -1,15 +1,25 @@
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 import { get, post } from '@/utils/request'
 import { getApiBaseUrl } from '@/utils/api-base'
-import type { ChatMessage, ChatSession, EvidenceLink, VideoData } from '@/types/videohub'
+import type {
+  ChatKnowledgeReference,
+  ChatMessage,
+  ChatSession,
+  EvidenceLink,
+  VideoData,
+  VideoEvidence,
+  WikiFallback,
+} from '@/types/videohub'
 import {
   displayQuestionFromStoredContent,
   dedupeNativeAnswerEvents,
+  failureMessageForReason,
+  isChatFailureReason,
   mergeLocalTurnWithStoredMessages,
   parseWeKnoraStreamChunk,
   shouldAbortStream,
 } from './chatStream'
-import { buildChatRequest, normalizeChatError, normalizeTenantId, type ChatRequestScope } from './chatRequest'
+import { buildChatRequest, normalizeChatError, normalizeTenantId, resolveChatScopeAgent, type ChatRequestScope } from './chatRequest'
 import { recordChatSourceAudit, recordDashboardQuestion } from './dashboard'
 
 interface ScopeResponse extends ChatRequestScope {
@@ -37,20 +47,28 @@ interface WeKnoraMessage {
   is_completed?: boolean
 }
 
-interface KnowledgeReference {
-  knowledge_id?: string
-  knowledge_title?: string
-  content?: string
-  metadata?: Record<string, string>
-}
+interface KnowledgeReference extends ChatKnowledgeReference {}
 
 interface EvidenceLookupItem {
   knowledge_id: string
   video_id: string
   video_title: string
   video_cover_url: string
+  start_ms: number
+  end_ms: number
+  start_seconds: number
+  end_seconds: number
   seconds: number
   timestamp: string
+  evidence_sentence_id: string
+  transcript_generation: string
+  source_type: string
+  linkable: boolean
+  wiki_page_id?: string
+  wiki_page_slug?: string
+  wiki_page_title?: string
+  wiki_knowledge_base_id?: string
+  wiki_linkable?: boolean
 }
 
 interface ApiEnvelope<T> {
@@ -65,6 +83,7 @@ interface SendOptions {
   globalMode?: boolean
   agentId?: string
   agentEnabled?: boolean
+  autoRoute?: boolean
   agentSourceTenantId?: string | null
   onMessage?: (message: ChatMessage) => void
   onStreamMessage?: (message: StreamingChatMessage) => void
@@ -88,7 +107,9 @@ export interface StreamingChatMessage extends ChatMessage {
   is_completed?: boolean
   request_id?: string
   assistant_message_id?: string
+  failure_reason?: import('./chatStream').ChatFailureReason
   agentEventStream?: Record<string, unknown>[]
+  knowledge_references?: KnowledgeReference[]
 }
 
 interface StreamingAnswerResult {
@@ -107,6 +128,8 @@ interface WeKnoraStreamPayload {
 }
 
 const VIDEOHUB_META_PREFIX = 'videohub:'
+const KB_TAG_RE = /<kb\b([^>]*?)\s*\/?>/gi
+const TAG_ATTR_RE = /([\w-]+)\s*=\s*"([^"]*)"/g
 
 function messageId() {
   return `message-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -124,6 +147,178 @@ function nowLabel() {
 function formatTime(seconds: number) {
   const safe = Math.max(0, Math.floor(seconds))
   return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`
+}
+
+function formatTimeRange(startSeconds: number, endSeconds: number) {
+  const start = Math.max(0, Math.floor(startSeconds))
+  const end = Math.max(start, Math.floor(endSeconds))
+  return `${formatTime(start)}–${formatTime(end)}`
+}
+
+function referenceLookupKeys(reference: KnowledgeReference): string[] {
+  const metadata = reference.metadata || {}
+  return [
+    reference.knowledge_id,
+    reference.id,
+    ...(Array.isArray(reference.chunk_ids) ? reference.chunk_ids : []),
+    metadata.source_chunk_id,
+    metadata.chunk_id,
+    metadata.evidence_sentence_id,
+    metadata.source_evidence_id,
+    metadata.evidence_id,
+  ].map(value => String(value || '').trim()).filter(Boolean)
+}
+
+function parseCitationAttributes(attrString: string): Record<string, string> {
+  const attrs: Record<string, string> = {}
+  TAG_ATTR_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = TAG_ATTR_RE.exec(attrString)) !== null) {
+    attrs[match[1]] = match[2]
+  }
+  return attrs
+}
+
+function referencesFromCitationTags(content: string): KnowledgeReference[] {
+  const refs: KnowledgeReference[] = []
+  KB_TAG_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = KB_TAG_RE.exec(content || '')) !== null) {
+    const attrs = parseCitationAttributes(match[1] || '')
+    const chunkID = String(attrs.chunk_id || attrs.chunkId || '').trim()
+    if (!chunkID) continue
+    refs.push({
+      id: chunkID,
+      knowledge_id: attrs.knowledge_id || undefined,
+      knowledge_title: attrs.doc || undefined,
+      knowledge_base_id: attrs.kb_id || attrs.kbId || undefined,
+      metadata: {
+        ...(attrs.doc ? { title: attrs.doc } : {}),
+        ...(attrs.kb_id || attrs.kbId ? { knowledge_base_id: attrs.kb_id || attrs.kbId } : {}),
+        chunk_id: chunkID,
+      },
+    })
+  }
+  return refs
+}
+
+function messageReferences(message: WeKnoraMessage): KnowledgeReference[] {
+  const stored = message.knowledge_references || []
+  if (stored.length) return stored
+  return referencesFromCitationTags(message.content || '')
+}
+
+function referenceIdentity(reference: KnowledgeReference) {
+  return referenceLookupKeys(reference)[0] || reference.id || reference.knowledge_id || reference.knowledge_title || ''
+}
+
+function mergeKnowledgeReferences(existing: KnowledgeReference[], incoming: KnowledgeReference[]) {
+  if (!existing.length) return incoming
+  if (!incoming.length) return existing
+  const merged = [...existing]
+  const seen = new Set(existing.map(referenceIdentity).filter(Boolean))
+  for (const reference of incoming) {
+    const key = referenceIdentity(reference)
+    if (key && seen.has(key)) continue
+    if (key) seen.add(key)
+    merged.push(reference)
+  }
+  return merged
+}
+
+function videoEvidenceFromLookup(item?: EvidenceLookupItem): VideoEvidence | undefined {
+  if (!item || !item.linkable || !item.video_id || !item.evidence_sentence_id || !item.transcript_generation) {
+    return undefined
+  }
+  return {
+    knowledgeId: item.knowledge_id,
+    videoId: item.video_id,
+    videoTitle: item.video_title,
+    videoCoverUrl: item.video_cover_url || undefined,
+    startMs: item.start_ms,
+    endMs: item.end_ms,
+    startSeconds: item.start_seconds,
+    endSeconds: item.end_seconds,
+    startTimestamp: formatTime(item.start_seconds),
+    endTimestamp: formatTime(item.end_seconds),
+    evidenceSentenceId: item.evidence_sentence_id,
+    transcriptGeneration: item.transcript_generation,
+    sourceType: 'transcript',
+    linkable: true,
+  }
+}
+
+function wikiFallbackFromLookup(item?: EvidenceLookupItem): WikiFallback | undefined {
+  if (!item || !item.wiki_linkable || !item.wiki_page_id || !item.wiki_page_slug || !item.wiki_knowledge_base_id) {
+    return undefined
+  }
+  return {
+    pageId: item.wiki_page_id,
+    slug: item.wiki_page_slug,
+    title: item.wiki_page_title || 'Wiki 页面',
+    knowledgeBaseId: item.wiki_knowledge_base_id,
+    linkable: true,
+  }
+}
+
+function evidenceLookupForReference(
+  reference: KnowledgeReference,
+  evidenceByKey: Map<string, EvidenceLookupItem>,
+): EvidenceLookupItem | undefined {
+  return referenceLookupKeys(reference).map(key => evidenceByKey.get(key)).find(Boolean)
+}
+
+function evidenceForReference(
+  reference: KnowledgeReference,
+  evidenceByKey: Map<string, EvidenceLookupItem>,
+): VideoEvidence | undefined {
+  const evidence = videoEvidenceFromLookup(evidenceLookupForReference(reference, evidenceByKey))
+  if (evidence) return evidence
+  return reference.video_evidence?.linkable ? reference.video_evidence : undefined
+}
+
+function hydrateKnowledgeReferences(
+  references: KnowledgeReference[],
+  evidenceByKey: Map<string, EvidenceLookupItem>,
+): KnowledgeReference[] {
+  return references.map(reference => {
+    const videoEvidence = evidenceForReference(reference, evidenceByKey)
+    const lookup = evidenceLookupForReference(reference, evidenceByKey)
+    const wikiFallback = wikiFallbackFromLookup(lookup)
+    const videoEvidenceUnavailable = Boolean(
+      lookup && lookup.source_type === 'transcript' && !lookup.linkable,
+    )
+    return {
+      ...reference,
+      ...(videoEvidence ? { video_evidence: videoEvidence } : {}),
+      ...(wikiFallback ? { wiki_fallback: wikiFallback } : {}),
+      ...(videoEvidenceUnavailable ? { video_evidence_unavailable: true } : {}),
+    }
+  })
+}
+
+function escapeCitationAttribute(value: string) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function fallbackAnswerFromVideoEvidence(references: KnowledgeReference[]) {
+  const usable = references
+    .filter(reference => reference.video_evidence?.linkable && reference.video_evidence.videoId)
+    .slice(0, 8)
+  if (!usable.length) return ''
+
+  const lines = usable.map(reference => {
+    const evidence = reference.video_evidence!
+    const citationID = reference.id || reference.knowledge_id || evidence.evidenceSentenceId
+    const doc = escapeCitationAttribute(evidence.videoTitle || reference.knowledge_title || '相关视频')
+    const chunkID = escapeCitationAttribute(citationID)
+    return `- <kb doc="${doc}" chunk_id="${chunkID}" /> 找到相关内容。`
+  })
+  return `已找到相关视频定位：\n\n${lines.join('\n')}`
 }
 
 function formatRelativeTime(input?: string) {
@@ -165,7 +360,8 @@ function unwrapData<T>(response: ApiEnvelope<T> | T): T {
 }
 
 function mapMessage(message: WeKnoraMessage, evidenceByKnowledgeID = new Map<string, EvidenceLookupItem>()): ChatMessage {
-  const evidenceLinks = evidenceLinksFromReferences(message.knowledge_references || [], evidenceByKnowledgeID)
+  const references = hydrateKnowledgeReferences(messageReferences(message), evidenceByKnowledgeID)
+  const evidenceLinks = evidenceLinksFromReferences(references, evidenceByKnowledgeID)
   const firstEvidence = evidenceLinks.find(item => item.videoId)
   const rawContent = message.content || ''
   return {
@@ -177,6 +373,7 @@ function mapMessage(message: WeKnoraMessage, evidenceByKnowledgeID = new Map<str
     relatedVideoTitle: firstEvidence?.videoTitle,
     relatedTime: firstEvidence?.seconds,
     evidenceLinks,
+    knowledge_references: references,
   }
 }
 
@@ -185,24 +382,35 @@ function evidenceLinksFromReferences(references: KnowledgeReference[], evidenceB
   const seen = new Set<string>()
   for (const reference of references) {
     const knowledgeID = reference.knowledge_id || ''
-    const evidence = evidenceByKnowledgeID.get(knowledgeID)
+    const evidence = evidenceForReference(reference, evidenceByKnowledgeID)
+    const lookup = referenceLookupKeys(reference).map(key => evidenceByKnowledgeID.get(key)).find(Boolean)
     const metadata = reference.metadata || {}
     const metadataStartMs = Number(metadata.start_ms)
+    const metadataEndMs = Number(metadata.end_ms)
     const hasMetadataStart = Number.isFinite(metadataStartMs) && metadataStartMs >= 0
     const seconds = hasMetadataStart
       ? Math.floor(metadataStartMs / 1000)
-      : evidence?.seconds ?? 0
-    const label = evidence?.video_title || reference.knowledge_title || metadata.source_filename || '知识来源'
-    const timestamp = hasMetadataStart ? formatTime(seconds) : evidence?.timestamp || formatTime(seconds)
-    const key = `${knowledgeID}:${seconds}:${label}`
+      : evidence?.startSeconds ?? lookup?.start_seconds ?? 0
+    const endSeconds = Number.isFinite(metadataEndMs) && metadataEndMs >= metadataStartMs
+      ? Math.floor(metadataEndMs / 1000)
+      : evidence?.endSeconds ?? lookup?.end_seconds ?? seconds
+    const label = evidence?.videoTitle || lookup?.video_title || reference.knowledge_title || metadata.source_filename || '知识来源'
+    const timestamp = evidence
+      ? formatTimeRange(evidence.startSeconds, evidence.endSeconds)
+      : lookup?.timestamp || formatTimeRange(seconds, endSeconds)
+    const key = `${reference.knowledge_id || reference.id || knowledgeID}:${seconds}:${endSeconds}:${label}`
     if (seen.has(key)) continue
     seen.add(key)
     result.push({
       label,
       timestamp,
       seconds,
-      videoId: evidence?.video_id || metadata.video_id,
-      videoTitle: evidence?.video_title || label,
+      endSeconds,
+      startMs: evidence?.startMs ?? lookup?.start_ms,
+      endMs: evidence?.endMs ?? lookup?.end_ms,
+      videoId: evidence?.videoId || lookup?.video_id || metadata.video_id,
+      videoTitle: evidence?.videoTitle || lookup?.video_title || label,
+      videoEvidence: evidence,
     })
   }
   return result
@@ -263,6 +471,7 @@ async function recordSourceAuditBestEffort(
   sessionID: string,
   scope: ScopeResponse,
   messages: WeKnoraMessage[],
+  outcome?: StreamingChatMessage,
 ) {
   const assistant = [...messages].reverse().find(message => message.role === 'assistant' && (message.knowledge_references || []).length)
   const references = assistant?.knowledge_references || []
@@ -289,14 +498,25 @@ async function recordSourceAuditBestEffort(
   const hasWiki = wikiPageIDs.size > 0
   const hasChunk = transcriptChunkIDs.size > 0
   const sourceMode = hasWiki && hasChunk ? 'wiki_and_chunk' : hasWiki ? 'wiki' : hasChunk ? 'chunk' : 'none'
+  const linkableEvidence = outcome?.video_evidence?.filter(item => item.linkable).length || 0
+  const invalidReferences = references.filter(reference => reference.video_evidence_unavailable).length
+  const coverage = outcome?.coverage
+  const degradationCode = outcome?.failure_reason
+    || (invalidReferences > 0 ? 'invalid_evidence' : coverage === 'partial' ? 'partial_coverage' : coverage === 'none' ? 'no_evidence' : undefined)
   await recordChatSourceAudit({
     event_id: eventID,
     session_id: sessionID,
     scope: scope.scope,
     ...(scope.video_id ? { video_id: scope.video_id } : {}),
+    ...(coverage || outcome?.route_mode ? { capability_version: 'v1' } : {}),
+    ...(outcome?.route_mode ? { route_mode: outcome.route_mode } : {}),
+    ...(coverage ? { coverage } : {}),
     source_mode: sourceMode,
     fallback_used: !hasWiki && hasChunk,
     references_found: references.length,
+    linkable_evidence: linkableEvidence,
+    invalid_references: invalidReferences,
+    ...(degradationCode ? { degradation_code: degradationCode } : {}),
     wiki_page_ids: [...wikiPageIDs],
     knowledge_object_ids: [...knowledgeObjectIDs],
     transcript_chunk_ids: [...transcriptChunkIDs],
@@ -321,11 +541,18 @@ async function lookupEvidence(knowledgeIDs: string[]) {
   if (!ids.length) return new Map<string, EvidenceLookupItem>()
   const query = encodeURIComponent(ids.join(','))
   const res = await get<ApiEnvelope<EvidenceLookupItem[]>>(`/api/custom/chat/evidence?knowledge_ids=${query}`)
-  return new Map((unwrapData(res) || []).map(item => [item.knowledge_id, item]))
+  const evidenceByKey = new Map<string, EvidenceLookupItem>()
+  for (const item of unwrapData(res) || []) {
+    for (const key of [item.knowledge_id, item.evidence_sentence_id]) {
+      const normalized = String(key || '').trim()
+      if (normalized) evidenceByKey.set(normalized, item)
+    }
+  }
+  return evidenceByKey
 }
 
 async function mapMessages(messages: WeKnoraMessage[]) {
-  const knowledgeIDs = messages.flatMap(message => (message.knowledge_references || []).map(item => item.knowledge_id || '')).filter(Boolean)
+  const knowledgeIDs = messages.flatMap(message => messageReferences(message).flatMap(referenceLookupKeys))
   const evidence = await lookupEvidence(knowledgeIDs)
   return messages.filter(message => message.role === 'user' || message.role === 'assistant').map(message => mapMessage(message, evidence))
 }
@@ -346,6 +573,44 @@ function parseStreamPayload(raw: string): WeKnoraStreamPayload | null {
 
 function streamType(payload: WeKnoraStreamPayload) {
   return String(payload.response_type || payload.type || '').trim()
+}
+
+function referencesFromPayload(payload: WeKnoraStreamPayload): KnowledgeReference[] {
+  const data = payload.data || {}
+  const raw = data.references || data.knowledge_references
+  if (!Array.isArray(raw)) return []
+  return raw.filter(item => item && typeof item === 'object') as KnowledgeReference[]
+}
+
+function videoEvidenceFromPayload(value: unknown): VideoEvidence[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap(item => {
+    if (!item || typeof item !== 'object') return []
+    const raw = item as Record<string, unknown>
+    const videoId = String(raw.video_id || '').trim()
+    const evidenceSentenceId = String(raw.evidence_sentence_id || '').trim()
+    const transcriptGeneration = String(raw.transcript_generation || '').trim()
+    const startMs = Number(raw.start_ms)
+    const endMs = Number(raw.end_ms)
+    if (!videoId || !evidenceSentenceId || !transcriptGeneration || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return []
+    const startSeconds = Math.max(0, Math.floor(startMs / 1000))
+    const endSeconds = Math.max(startSeconds, Math.floor(endMs / 1000))
+    return [{
+      knowledgeId: String(raw.knowledge_id || '').trim(),
+      videoId,
+      videoTitle: String(raw.video_title || '').trim(),
+      startMs,
+      endMs,
+      startSeconds,
+      endSeconds,
+      startTimestamp: formatTime(startSeconds),
+      endTimestamp: formatTime(endSeconds),
+      evidenceSentenceId,
+      transcriptGeneration,
+      sourceType: 'transcript',
+      linkable: raw.linkable === true,
+    }]
+  })
 }
 
 function appendNativeAgentEvent(
@@ -503,6 +768,11 @@ async function streamAnswer(sessionID: string, question: string, scope: ScopeRes
   let thinkingText = ''
   let activityText = ''
   let completed = false
+  let knowledgeReferences: KnowledgeReference[] = []
+  let routeMode: 'quick' | 'reasoning' | undefined
+  let coverage: 'complete' | 'partial' | 'none' | undefined
+  let failureReason: StreamingChatMessage['failure_reason']
+  let videoEvidence: VideoEvidence[] = []
   const agentEventStream: Record<string, unknown>[] = []
   const eventMap = new Map<string, Record<string, unknown>>()
   const pendingToolCalls = new Map<string, Record<string, unknown>>()
@@ -513,15 +783,20 @@ async function streamAnswer(sessionID: string, question: string, scope: ScopeRes
     text: cleanAnswer(answer),
     role: 'assistant',
     content: cleanAnswer(answer),
-    isAgentMode: Boolean(scope.agent_id) || agentEventStream.length > 0,
+    isAgentMode: Boolean(scope.agent_id && scope.agent_id !== 'builtin-quick-answer') || agentEventStream.length > 0,
     is_completed: completed,
     request_id: sessionID,
     agentEventStream: cloneAgentEventStream(completed ? dedupeNativeAnswerEvents(agentEventStream) : agentEventStream),
+    knowledge_references: knowledgeReferences,
+    route_mode: routeMode,
+    coverage,
+    failure_reason: failureReason,
+    video_evidence: videoEvidence,
     thinkingText: thinkingText.trim(),
     activityText,
     timestamp: nowLabel(),
   })
-  const endpoint = scope.agent_id ? 'agent-chat' : 'knowledge-chat'
+  const endpoint = scope.auto_route || scope.agent_id ? 'agent-chat' : 'knowledge-chat'
   await fetchEventSource(`${apiBase}/api/v1/${endpoint}/${sessionID}`, {
     method: 'POST',
     signal: streamController.signal,
@@ -530,7 +805,20 @@ async function streamAnswer(sessionID: string, question: string, scope: ScopeRes
     openWhenHidden: true,
     onopen: async response => {
       if (!response.ok) {
-        const error = new Error(`问答请求失败：HTTP ${response.status}`) as Error & { status?: number }
+        let detail = ''
+        try {
+          const payload = await response.clone().json() as {
+            error?: string | { message?: string }
+            message?: string
+          }
+          detail = typeof payload.error === 'string'
+            ? payload.error
+            : payload.error?.message || payload.message || ''
+        } catch {
+          // Keep the stable HTTP error when the response is not JSON.
+        }
+        const suffix = detail.trim() ? `：${detail.trim()}` : ''
+        const error = new Error(`问答请求失败：HTTP ${response.status}${suffix}`) as Error & { status?: number }
         error.status = response.status
         throw error
       }
@@ -554,6 +842,19 @@ async function streamAnswer(sessionID: string, question: string, scope: ScopeRes
         activityText = ''
       }
       if (payload) {
+        const route = String(payload.data?.route_mode || '').trim()
+        if (route === 'quick' || route === 'reasoning') routeMode = route
+        const reportedCoverage = String(payload.data?.coverage || '').trim()
+        if (reportedCoverage === 'complete' || reportedCoverage === 'partial' || reportedCoverage === 'none') coverage = reportedCoverage
+        const reportedFailure = String(payload.data?.failure_reason || '').trim()
+        if (isChatFailureReason(reportedFailure)) {
+          failureReason = reportedFailure
+        }
+        if (Array.isArray(payload.data?.video_evidence)) videoEvidence = videoEvidenceFromPayload(payload.data.video_evidence)
+        const references = referencesFromPayload(payload)
+        if (references.length) {
+          knowledgeReferences = mergeKnowledgeReferences(knowledgeReferences, references)
+        }
         appendNativeAgentEvent(agentEventStream, eventMap, pendingToolCalls, payload, answer)
         if (streamType(payload) === 'complete' || (!streamType(payload) && payload.done)) completed = true
       }
@@ -568,6 +869,14 @@ async function streamAnswer(sessionID: string, question: string, scope: ScopeRes
     },
   })
   completed = true
+  knowledgeReferences = mergeKnowledgeReferences(knowledgeReferences, referencesFromCitationTags(answer))
+  knowledgeReferences = hydrateKnowledgeReferences(
+    knowledgeReferences,
+    await lookupEvidence(knowledgeReferences.flatMap(referenceLookupKeys)),
+  )
+  if (!cleanAnswer(answer)) {
+    answer = failureMessageForReason(failureReason) || fallbackAnswerFromVideoEvidence(knowledgeReferences)
+  }
   finalizeNativeAgentStream(agentEventStream, eventMap, answer)
   emitChunk()
   const streamMessage: StreamingChatMessage = {
@@ -576,10 +885,15 @@ async function streamAnswer(sessionID: string, question: string, scope: ScopeRes
     text: cleanAnswer(answer),
     role: 'assistant',
     content: cleanAnswer(answer),
-    isAgentMode: Boolean(scope.agent_id) || agentEventStream.length > 0,
+    isAgentMode: Boolean(scope.agent_id && scope.agent_id !== 'builtin-quick-answer') || agentEventStream.length > 0,
     is_completed: true,
     request_id: sessionID,
     agentEventStream: cloneAgentEventStream(agentEventStream),
+    knowledge_references: knowledgeReferences,
+    route_mode: routeMode,
+    coverage,
+    failure_reason: failureReason,
+    video_evidence: videoEvidence,
     thinkingText: thinkingText.trim(),
     activityText: '',
     timestamp: nowLabel(),
@@ -591,8 +905,6 @@ function cleanAnswer(text: string) {
   return text
     .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
     .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
-    .replace(/<kb\b[^>]*\/?>/gi, '')
-    .replace(/<web\b[^>]*\/?>/gi, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
@@ -666,15 +978,20 @@ export async function loadChatSession(session: ChatSession): Promise<ChatSession
 
 export async function sendChatMessage(question: string, options: SendOptions = {}): Promise<ChatMessage> {
   try {
-    const scope = await getScope(options)
+    const scope = {
+      ...resolveChatScopeAgent(await getScope(options), options),
+      ...(options.autoRoute !== undefined ? { auto_route: options.autoRoute } : {}),
+      ...(options.agentId ? { agent_id: options.agentId } : {}),
+      ...(options.agentEnabled !== undefined ? { agent_enabled: options.agentEnabled } : {}),
+    }
     const session = await createSession(question, scope)
     const eventID = recordQuestionBestEffort(question, scope, session.id, options.currentVideo, options.currentTime)
-    const { answer } = await streamAnswer(session.id, question, scope, { onChunk: options.onStreamMessage })
+    const { answer, streamMessage } = await streamAnswer(session.id, question, scope, { onChunk: options.onStreamMessage })
     const storedMessages = await loadSessionMessages(session.id, scope.tenant_id)
     const mappedMessages = await mapMessages(storedMessages)
     const assistant = [...mappedMessages].reverse().find(message => message.sender === 'assistant' && message.text.trim())
       || { id: messageId(), sender: 'assistant' as const, text: answer, timestamp: nowLabel() }
-    void recordSourceAuditBestEffort(eventID, session.id, scope, storedMessages).catch(error => {
+    void recordSourceAuditBestEffort(eventID, session.id, scope, storedMessages, streamMessage).catch(error => {
       console.warn('record chat source audit failed', error)
     })
     options.onMessage?.(assistant)
@@ -686,13 +1003,18 @@ export async function sendChatMessage(question: string, options: SendOptions = {
 
 export async function createChatTurn(question: string, options: TurnOptions = {}): Promise<ChatSession> {
   try {
-    const scope = await getScope(options)
+    const scope = resolveChatScopeAgent(await getScope(options), options)
     const tenantID = normalizeTenantId(options.session?.tenantId) || normalizeTenantId(scope.tenant_id)
+    const sourceTenantID = normalizeTenantId(options.agentSourceTenantId)
+    const currentTenantID = normalizeTenantId(scope.tenant_id) || tenantID
     const effectiveScope = {
       ...(tenantID && !scope.tenant_id ? { ...scope, tenant_id: tenantID } : scope),
       ...(options.agentId ? { agent_id: options.agentId } : {}),
       ...(options.agentEnabled !== undefined ? { agent_enabled: options.agentEnabled } : {}),
-      ...(options.agentSourceTenantId ? { agent_source_tenant_id: options.agentSourceTenantId } : {}),
+      ...(options.autoRoute !== undefined ? { auto_route: options.autoRoute } : {}),
+      ...(sourceTenantID && sourceTenantID !== currentTenantID
+        ? { agent_source_tenant_id: sourceTenantID }
+        : {}),
     }
     const session = options.session?.id && !options.session.id.startsWith('pending-')
       ? {
@@ -711,7 +1033,7 @@ export async function createChatTurn(question: string, options: TurnOptions = {}
     const { answer, streamMessage } = await streamAnswer(session.id, question, effectiveScope, { onChunk: options.onStreamMessage })
     const storedMessages = await loadSessionMessages(session.id, tenantID)
     const messages = await mapMessages(storedMessages)
-    void recordSourceAuditBestEffort(eventID, session.id, effectiveScope, storedMessages).catch(error => {
+    void recordSourceAuditBestEffort(eventID, session.id, effectiveScope, storedMessages, streamMessage).catch(error => {
       console.warn('record chat source audit failed', error)
     })
     const finalMessages = mergeLocalTurnWithStoredMessages(messages, userMessage, { ...streamMessage, id: messageId(), text: answer, timestamp: nowLabel() })

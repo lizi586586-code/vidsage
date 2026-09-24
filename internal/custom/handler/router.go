@@ -280,9 +280,9 @@ func buildRouter(deps *Deps) *gin.Engine {
 	// Chat and Agent retrieval operate on the video knowledge role (Wiki and
 	// full-document content). Transcript chunk IDs remain scoped by the
 	// per-video metadata returned from the evidence pipeline.
-	chatScope := NewChatScopeHandler(deps.DB, roles.Knowledge, agentID, tenantID)
+	chatScope := NewChatScopeHandlerWithEvidence(deps.DB, roles.Knowledge, roles.Evidence, agentID, tenantID)
 	api.GET("/chat/scope/global", chatScope.Global)
-	chatEvidence := NewChatEvidenceHandler(deps.DB)
+	chatEvidence := NewChatEvidenceHandlerWithWiki(deps.DB, deps.KnowledgeWeKnora, deps.Wiki, roles.Knowledge)
 	api.GET("/chat/evidence", chatEvidence.Lookup)
 	chatAudit := NewChatAuditHandler(deps.DB)
 	api.POST("/chat/source-audit", chatAudit.RecordSourceAudit)

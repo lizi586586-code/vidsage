@@ -124,6 +124,22 @@ func TestWikiChunkCitationPrompt_PreservesPlaceholders(t *testing.T) {
 	}
 }
 
+func TestWikiExtractionPromptsDefineCaseMetadataContract(t *testing.T) {
+	for name, prompt := range map[string]string{
+		"legacy extraction":    WikiKnowledgeExtractPrompt,
+		"candidate extraction": WikiCandidateSlugPrompt,
+		"chunk citation":       WikiChunkCitationPrompt,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, required := range []string{"metadata", "sub_type", "case"} {
+				if !strings.Contains(prompt, required) {
+					t.Errorf("prompt is missing case metadata contract %q", required)
+				}
+			}
+		})
+	}
+}
+
 func TestWikiPageModifyUserPrompt_HidesInternalChunkHandles(t *testing.T) {
 	combined := WikiPageModifySystemPrompt + "\n" + WikiPageModifyUserPrompt
 	for _, guidance := range []string{
@@ -139,6 +155,20 @@ func TestWikiPageModifyUserPrompt_HidesInternalChunkHandles(t *testing.T) {
 	for _, obsolete := range []string{"Preserve Citations", "followed by an inline citation"} {
 		if strings.Contains(combined, obsolete) {
 			t.Errorf("WikiPageModifyUserPrompt still contains obsolete inline-citation rule %q", obsolete)
+		}
+	}
+}
+
+func TestWikiPageModifyPromptClassifiesNatureFromPageText(t *testing.T) {
+	for _, required := range []string{
+		`"## 信息性质"`,
+		"from the text under that section",
+		"案例",
+		"洞察",
+		"Do not add a new JSON/YAML field",
+	} {
+		if !strings.Contains(WikiPageModifySystemPrompt, required) {
+			t.Errorf("WikiPageModifySystemPrompt missing knowledge-object nature rule %q", required)
 		}
 	}
 }

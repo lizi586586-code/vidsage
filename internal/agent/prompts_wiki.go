@@ -129,6 +129,7 @@ Each concept should have:
 - "aliases": An array of strings representing names that refer to THE EXACT SAME concept. Only include: official abbreviations (e.g. "RAG" for "Retrieval-Augmented Generation"), full/short name variants, and well-known synonyms used interchangeably in the field. Do NOT include sub-topics, related techniques, broader categories, or implementation details. Provide [] if none.
 - "description": **Index listing summary** — one sentence, 15-40 words, in {{.Language}}. Defines WHAT this concept IS. Must be self-contained (understandable without reading the full page). This will be displayed in the wiki index.
 - "details": A 2-5 sentence explanation in {{.Language}} as discussed in the document. **Image rule**: If the document contains relevant <image> elements in an <images> tag, include them in the details using Markdown syntax: ![caption](url). The URL inside ![caption](url) is an opaque token; reproduce it EXACTLY and VERBATIM, do not alter, shorten, or normalize it.
+- "metadata": An optional object for the concept's secondary classification. Output exactly {"sub_type":"case"} only when the concept describes a concrete case with a clear subject, context, problem or goal, action or process, and result, effect, lesson, or failure. At least a clear context plus two of problem, action, and result must be supported by the document. Omit "metadata" for an ordinary concept. Do not output any other sub_type, and never output this metadata for entities.
 
 Only include concepts that are substantively discussed. Skip trivial or overly generic concepts.
 
@@ -159,6 +160,16 @@ Output ONLY valid JSON. Example:
       "aliases": ["RAG"],
       "description": "A technique that combines information retrieval with language model generation.",
       "details": "RAG works by first retrieving relevant documents from a knowledge base using vector similarity search, then feeding those documents as context to an LLM for answer generation."
+    },
+    {
+      "name": "Enterprise Knowledge Base Practice",
+      "slug": "concept/enterprise-knowledge-base-practice",
+      "aliases": [],
+      "description": "A concrete enterprise practice that addresses knowledge retrieval problems through a defined implementation process and observed results.",
+      "details": "The enterprise built a knowledge base to improve retrieval accuracy, introduced reranking and citation checks, and adjusted the approach based on implementation results.",
+      "metadata": {
+        "sub_type": "case"
+      }
     }
   ]
 }`
@@ -214,6 +225,7 @@ Each concept should have:
 - "aliases": An array of strings representing names that refer to THE EXACT SAME concept. Only include: official abbreviations (e.g. "RAG" for "Retrieval-Augmented Generation"), full/short name variants, and well-known synonyms used interchangeably in the field. Do NOT include sub-topics, related techniques, broader categories, or implementation details. Provide [] if none.
 - "description": **Index listing summary** — one sentence, 15-40 words, in {{.Language}}. Defines WHAT this concept IS. Must be self-contained.
 - "details": A short 1-3 sentence fallback summary in {{.Language}}. Keep it under 300 characters.
+- "metadata": An optional object. Output exactly {"sub_type":"case"} only when the concept is a concrete case with a clear subject and context, plus at least two of problem, action, and result. Omit it for ordinary concepts. Do not output any other sub_type, and never output this metadata for entities.
 
 Apply the Extraction Scope rules above. Skip concepts that are merely name-dropped without discussion.
 
@@ -244,6 +256,16 @@ Output ONLY valid JSON. Example:
       "aliases": ["RAG"],
       "description": "A technique that combines information retrieval with language model generation.",
       "details": "Retrieves documents, then feeds them as context to an LLM."
+    },
+    {
+      "name": "Enterprise Knowledge Base Practice",
+      "slug": "concept/enterprise-knowledge-base-practice",
+      "aliases": [],
+      "description": "A concrete enterprise practice that addresses knowledge retrieval problems through a defined implementation process and observed results.",
+      "details": "The enterprise built a knowledge base to improve retrieval accuracy, introduced reranking and citation checks, and adjusted the approach based on implementation results.",
+      "metadata": {
+        "sub_type": "case"
+      }
     }
   ]
 }`
@@ -277,6 +299,7 @@ If this batch reveals a significant entity/concept that is **NOT** in <candidate
 Each new slug must include:
 - "type": "entity" or "concept"
 - "name", "slug", "aliases", "description", "details" (same semantics as the candidate list)
+- "metadata": optional; for a concrete concept case, output exactly {"sub_type":"case"}. Omit it for ordinary concepts and all entities.
 - "source_chunks": list of chunk IDs in the current batch that discuss it
 
 ### JSON Formatting Rules
@@ -299,6 +322,18 @@ Output format:
       "description": "...",
       "details": "...",
       "source_chunks": ["c005"]
+    },
+    {
+      "type": "concept",
+      "name": "Enterprise Knowledge Base Practice",
+      "slug": "concept/enterprise-knowledge-base-practice",
+      "aliases": [],
+      "description": "A concrete enterprise practice with a defined context, action, and observed result.",
+      "details": "The practice addressed a retrieval problem through implementation changes and follow-up evaluation.",
+      "metadata": {
+        "sub_type": "case"
+      },
+      "source_chunks": ["c006"]
     }
   ]
 }
@@ -336,6 +371,8 @@ const WikiPageModifySystemPrompt = `You are a wiki editor tasked with updating a
 6. Keep a [[slug|name]] link only when its slug is present in the supplied valid-link list. Never invent a slug and never link a page to itself.
 7. Images may be included only from supplied new information. Treat each Markdown image URL as an opaque token and reproduce it exactly without altering, shortening, or normalizing it.
 8. The first output line must be "SUMMARY: {one sentence, 15-40 words}", followed immediately by clean Markdown page content.
+9. When the supplied knowledge-object page text contains an "## 信息性质" section, determine whether it is "案例" or "洞察" from the text under that section. Do not infer the nature from the slug, page type, title, links, or surrounding page metadata.
+10. Preserve the existing "信息性质" text in the Markdown page body when it is present. Do not add a new JSON/YAML field, frontmatter key, or separate classification output.
 
 Output the SUMMARY line first, followed by the updated Markdown content, with no other preamble.`
 

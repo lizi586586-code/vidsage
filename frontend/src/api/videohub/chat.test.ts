@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildChatRequest, normalizeChatError } from './chatRequest'
+import { buildChatRequest, normalizeChatError, resolveChatScopeAgent, shouldAutoRoute } from './chatRequest'
 import { appendSelectedTenantHeader } from '../../utils/tenantHeaders'
 import {
   displayQuestionFromStoredContent,
   dedupeNativeAnswerEvents,
+  failureMessageForReason,
   mergeLocalTurnWithStoredMessages,
   parseWeKnoraStreamChunk,
   shouldAbortStream,
@@ -115,6 +116,12 @@ test('uses final_answer from complete event when the agent did not emit answer c
   })
 })
 
+test('maps failed completion reasons to visible assistant text', () => {
+  assert.equal(failureMessageForReason('answer_contract_truncated'), '回答生成不完整，请重试。')
+  assert.equal(failureMessageForReason('answer_contract_invalid'), '回答格式校验失败，请重试。')
+  assert.equal(failureMessageForReason('unknown_failure'), '')
+})
+
 test('marks done answer chunks as complete enough for video assistant unlock', () => {
   assert.deepEqual(parseWeKnoraStreamChunk(JSON.stringify({ response_type: 'answer', content: '可执行建议', done: true })), {
     kind: 'answer',
@@ -167,6 +174,39 @@ test('uses the configured resource tenant for Agent requests', () => {
   assert.equal(request.headers['X-Tenant-ID'], '10000')
   assert.equal(request.body.agent_id, 'agent-1')
   assert.equal(request.body.agent_enabled, true)
+  assert.equal('scope' in request.body, false)
+})
+
+test('removes the configured fallback agent for an unselected auto-routed turn', () => {
+  const scope = resolveChatScopeAgent(
+    {
+      scope: 'video',
+      agent_id: 'configured-video-agent',
+      agent_source_tenant_id: '10000',
+      knowledge_base_ids: ['kb-1'],
+      knowledge_ids: ['chunk-1'],
+    },
+    { autoRoute: true },
+  )
+
+  assert.equal(scope.agent_id, undefined)
+  assert.equal(scope.agent_source_tenant_id, undefined)
+  assert.deepEqual(scope.knowledge_ids, ['chunk-1'])
+})
+
+test('preserves an explicitly selected agent when auto-routing is enabled', () => {
+  const scope = resolveChatScopeAgent(
+    { scope: 'video', agent_id: 'configured-video-agent', knowledge_base_ids: [], knowledge_ids: [] },
+    { autoRoute: true, agentId: 'custom-agent' },
+  )
+
+  assert.equal(scope.agent_id, 'configured-video-agent')
+})
+
+test('only enables auto-routing when no agent was explicitly selected', () => {
+  assert.equal(shouldAutoRoute('', false), true)
+  assert.equal(shouldAutoRoute('builtin-quick-answer', true), false)
+  assert.equal(shouldAutoRoute('6f3691c2-8d15-48f8-b1f4-dfadd222ca53', true), false)
 })
 
 test('keeps transcript chunk scope on video Agent requests for Wiki source_refs fallback', () => {

@@ -160,8 +160,7 @@ async function loadVideo(id: string) {
     void loadContent(nextVideo)
     await nextTick()
     page.value?.scrollTo({ top: 0 })
-    const querySeconds = Number(route.query.t)
-    if (route.query.t !== undefined && Number.isFinite(querySeconds)) seekTo(Math.min(Math.max(querySeconds, 0), video.value.durationSeconds))
+    seekToRouteTime()
   }
   catch (reason) {
     if (sequence !== loadSequence) return
@@ -273,16 +272,26 @@ async function loadVideoOptions() {
   }
 }
 function seekTo(seconds: number) { player.value?.seekTo(seconds) }
+function seekToRouteTime() {
+  const querySeconds = Number(route.query.t)
+  if (!video.value || route.query.t === undefined || !Number.isFinite(querySeconds)) return
+  seekTo(Math.min(Math.max(querySeconds, 0), video.value.durationSeconds))
+}
 function navigateToEvidence(videoId: string, seconds: number) {
-  if (videoId === video.value?.id) seekTo(seconds)
-  else router.push(`/platform/videos/${videoId}?t=${seconds}`)
+  const safeSeconds = Math.max(0, Math.floor(seconds))
+  if (videoId === video.value?.id) {
+    seekTo(safeSeconds)
+    router.push({ name: 'videoDetail', params: { videoId }, query: { ...route.query, t: String(safeSeconds) } })
+  } else {
+    router.push({ name: 'videoDetail', params: { videoId }, query: { t: String(safeSeconds) } })
+  }
 }
 function onSelectVideoById(videoId: string, seconds: number) {
-  if (videoId === video.value?.id) seekTo(seconds)
-  else router.push(`/platform/videos/${videoId}?t=${seconds}`)
+  navigateToEvidence(videoId, seconds)
 }
 function switchVideo(value: string | number | Array<string | number>) { if (typeof value === 'string') router.push(`/platform/videos/${value}`) }
 watch(() => route.params.videoId, value => { if (typeof value === 'string') loadVideo(value) })
+watch(() => route.query.t, () => { void nextTick(seekToRouteTime) })
 watch(showRelatedKnowledgeTab, visible => {
   if (!visible && activeTab.value === 'related') activeTab.value = 'summary'
 })

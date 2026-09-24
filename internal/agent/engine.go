@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 // langfuseQueryPreview caps the query length we ship as the agent.execute
@@ -133,7 +135,16 @@ func (e *AgentEngine) buildSystemPrompt(ctx context.Context) string {
 	// Memory has to ride in the system prompt: buildMessagesWithLLMContext
 	// drops system messages coming from history, so a separate memory message
 	// would be silently discarded from the second turn onward.
-	return strings.TrimRight(prompt, " \t\r\n") + e.memoryPrompt + e.modelContext.ProtocolPrompt()
+	videoPrompt := ""
+	if e.config != nil && videoevidence.Supports(e.config.VideoEvidenceCitation) {
+		videoPrompt = videoevidence.ProtocolPrompt()
+		if e.config.AnswerContractEnabled {
+			videoPrompt += fmt.Sprintf(`
+
+Final response contract: output exactly one JSON object using %s with fields schema_version, mode, coverage, content_markdown, and blocks. Set mode to exactly "reasoning" for this agent. Each block type must be exactly one of "summary", "topic", "comparison", "steps", or "evidence"; never use "video_evidence" or "answer" as a block type. Do not output Markdown fences or trailing text. Each block may contain only type, title, text_markdown, and evidence_refs. Citation handles in content_markdown and text_markdown must use the exact form <ref id="cN"/> and must be listed in the matching block's evidence_refs. Ordinary knowledge/Wiki cN handles may be cited for explanation, but they remain normal sources and never become video evidence; video locations require a validated transcript handle.`, videoevidence.AnswerContractVersion)
+		}
+	}
+	return strings.TrimRight(prompt, " \t\r\n") + e.memoryPrompt + e.modelContext.ProtocolPrompt() + videoPrompt
 }
 
 // SetMemoryPrompt supplies the long-term memory envelope for this run. Empty
@@ -394,6 +405,7 @@ func (e *AgentEngine) executeLoop(
 	defer emitCompletion()
 
 	emptyRetries := 0
+	contractRetries := 0
 	consecutiveSameContent := 0
 	lastResponseContent := ""
 loop:
@@ -429,7 +441,7 @@ loop:
 		// every exit path (break/continue/next) without having to sprinkle
 		// manual finish calls throughout the many branches below.
 		outcome, iterErr := e.runReActIteration(ctx, state, &messages, tools,
-			sessionID, messageID, query, &emptyRetries, &consecutiveSameContent, &lastResponseContent)
+			sessionID, messageID, query, &emptyRetries, &contractRetries, &consecutiveSameContent, &lastResponseContent)
 		if iterErr != nil {
 			return state, iterErr
 		}
@@ -458,7 +470,6 @@ loop:
 			e.handleMaxIterations(ctx, query, state, sessionID)
 		}
 	}
-
 	return state, nil
 }
 
@@ -468,6 +479,8 @@ loop:
 type iterOutcome int
 
 const (
+	maxAnswerContractRetries = 1
+
 	// iterOutcomeNext advances state.CurrentRound and loops again.
 	iterOutcomeNext iterOutcome = iota
 	// iterOutcomeContinue re-runs the loop without advancing the round
@@ -476,6 +489,31 @@ const (
 	// iterOutcomeBreak exits the loop (final answer, stuck loop, or end).
 	iterOutcomeBreak
 )
+
+func answerContractFailureReason(err error) string {
+	var contractErr *videoevidence.AnswerContractError
+	if errors.As(err, &contractErr) && contractErr.Code == videoevidence.AnswerErrorTruncatedOutput {
+		return "answer_contract_truncated"
+	}
+	return "answer_contract_invalid"
+}
+
+func answerContractFailureMessage(reason string) string {
+	if reason == "answer_contract_truncated" {
+		return "回答生成不完整，请重试。"
+	}
+	return "回答格式校验失败，请重试。"
+}
+
+func answerContractRetryPrompt(err error) string {
+	reason := answerContractFailureReason(err)
+	if reason == "answer_contract_truncated" {
+		return fmt.Sprintf("上一轮 %s 输出被截断。请立即重试，只输出一个未加围栏的合法 JSON 对象，不要输出思考过程或解释。使用 %s 协议；content_markdown 不超过 400 个字符，blocks 最多 3 个，每个 text_markdown 不超过 500 个字符。每个 evidence_refs 必须逐字对应同一 block 文本中的 <ref id=\"cN\"/>，只能使用工具返回的句柄，不要输出 JSON 之外的内容。",
+			videoevidence.AnswerContractVersion, videoevidence.AnswerContractVersion)
+	}
+	return fmt.Sprintf("上一轮响应违反了 %s 协议（%v）。请只输出一个未加围栏的合法 JSON 对象：schema_version 必须是 %q，mode 必须是 %q，coverage 必须是 complete/partial/none 之一，block 类型只能是 summary/topic/comparison/steps/evidence。每个 evidence_refs 必须逐字对应同一 block 文本中的 <ref id=\"cN\"/>；只能使用工具返回的句柄。不要输出解释、时间戳、视频标题或 JSON 之外的内容。",
+		videoevidence.AnswerContractVersion, err, videoevidence.AnswerContractVersion, videoevidence.AnswerModeReasoning)
+}
 
 // runReActIteration executes one ReAct step: think → analyze → act → observe.
 // Extracted from executeLoop so the whole iteration body can live inside a
@@ -490,7 +528,7 @@ func (e *AgentEngine) runReActIteration(
 	messagesPtr *[]chat.Message,
 	tools []chat.Tool,
 	sessionID, assistantMessageID, query string,
-	emptyRetries, consecutiveSameContent *int,
+	emptyRetries, contractRetries, consecutiveSameContent *int,
 	lastResponseContent *string,
 ) (outcome iterOutcome, retErr error) {
 	roundStart := time.Now()
@@ -641,6 +679,35 @@ func (e *AgentEngine) runReActIteration(
 	// 2. Analyze: Check for stop conditions (natural stop with no tool calls)
 	verdict := e.analyzeResponse(ctx, response, step, state.CurrentRound, sessionID, roundStart)
 	if verdict.isDone {
+		if verdict.contract.SchemaVersion != "" && verdict.contractErr == nil {
+			projection, err := e.projectAnswerContract(verdict.contract, state.KnowledgeRefs)
+			if err != nil {
+				logger.Errorf(ctx, "[Agent][Round-%d] Answer evidence projection failed: %v", round, err)
+				verdict.contractErr = err
+			} else {
+				verdict.finalAnswer = e.modelContext.DecodeOutputText(projection.RenderedMarkdown)
+				verdict.emptyContent = strings.TrimSpace(verdict.finalAnswer) == ""
+				e.emitValidatedFinalAnswer(ctx, sessionID, verdict.finalAnswer)
+			}
+		}
+		if verdict.contractErr != nil {
+			if e.config != nil && e.config.AnswerContractEnabled && *contractRetries < maxAnswerContractRetries {
+				*contractRetries++
+				state.RoundSteps = append(state.RoundSteps, verdict.step)
+				*messagesPtr = append(*messagesPtr, chat.Message{
+					Role:    "user",
+					Content: answerContractRetryPrompt(verdict.contractErr),
+				})
+				return iterOutcomeContinue, nil
+			}
+			reason := answerContractFailureReason(verdict.contractErr)
+			state.CompletionStatus = "failed"
+			state.CompletionFailureReason = reason
+			state.FinalAnswer = answerContractFailureMessage(reason)
+			state.IsComplete = true
+			state.RoundSteps = append(state.RoundSteps, verdict.step)
+			return iterOutcomeBreak, nil
+		}
 		// Guard against empty content: when the LLM stops naturally with no
 		// content and no tool calls (e.g., thinking-only loop without KB),
 		// retry with a nudge message instead of accepting an empty answer.
@@ -649,9 +716,13 @@ func (e *AgentEngine) runReActIteration(
 			if *emptyRetries <= maxEmptyResponseRetries {
 				logger.Warnf(ctx, "[Agent][Round-%d] Empty content with stop - retrying (%d/%d)",
 					round, *emptyRetries, maxEmptyResponseRetries)
+				nudge := "Please provide your complete answer now as plain text."
+				if e.config != nil && e.config.AnswerContractEnabled {
+					nudge = fmt.Sprintf("Please provide your complete answer now as exactly one valid %s JSON object, without fences or trailing text.", videoevidence.AnswerContractVersion)
+				}
 				*messagesPtr = append(*messagesPtr, chat.Message{
 					Role:    "user",
-					Content: "Please provide your complete answer now as plain text.",
+					Content: nudge,
 				})
 				return iterOutcomeContinue, nil
 			}
@@ -678,7 +749,11 @@ func (e *AgentEngine) runReActIteration(
 		state.FinalAnswer = verdict.finalAnswer
 		state.IsComplete = true
 		state.CompletionStatus = "succeeded"
-		state.CompletionFailureReason = ""
+		if e.config != nil && e.config.SkillUnavailable {
+			state.CompletionFailureReason = "skill_unavailable"
+		} else {
+			state.CompletionFailureReason = ""
+		}
 		state.RoundSteps = append(state.RoundSteps, verdict.step)
 		return iterOutcomeBreak, nil
 	}
@@ -697,6 +772,10 @@ func (e *AgentEngine) runReActIteration(
 	// 3. Act: Execute tool calls
 	e.executeToolCalls(ctx, response, &step, state.CurrentRound, sessionID, assistantMessageID)
 	toolCallCount = len(step.ToolCalls)
+	state.KnowledgeRefs = videoevidence.MergeReferences(
+		state.KnowledgeRefs,
+		answerReferencesFromToolCalls(step.ToolCalls),
+	)
 
 	// 4. Observe: Add tool results to messages and write to context
 	state.RoundSteps = append(state.RoundSteps, step)
@@ -707,7 +786,6 @@ func (e *AgentEngine) runReActIteration(
 		"tool_calls":  toolCallCount,
 		"thought_len": len(step.Thought),
 	})
-
 	return iterOutcomeNext, nil
 }
 

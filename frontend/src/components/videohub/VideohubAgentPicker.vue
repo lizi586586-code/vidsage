@@ -2,13 +2,13 @@
   <div ref="rootRef" class="videohub-agent-picker">
     <button
       type="button"
-      class="picker-chip"
+      :class="['picker-chip', { 'picker-chip--tool': props.appearance === 'tool' }]"
       :aria-label="t('videohub.agentPicker.title')"
       @click.stop="toggleDropdown"
     >
-      <t-icon name="precise-search" />
-      <span class="picker-chip__label">{{ currentAgentName }}</span>
-      <t-icon name="chevron-down" :class="{ 'picker-chip__icon--open': dropdownVisible }" />
+      <t-icon :name="props.appearance === 'tool' ? 'map-route-planning' : 'precise-search'" />
+      <span class="picker-chip__label">{{ props.appearance === 'tool' && !currentAgentId ? (props.toolLabel || currentAgentName) : currentAgentName }}</span>
+      <t-icon v-if="props.appearance !== 'tool'" name="chevron-down" :class="{ 'picker-chip__icon--open': dropdownVisible }" />
     </button>
     <Teleport to="body">
       <div
@@ -18,6 +18,14 @@
         role="listbox"
         @click.stop
       >
+        <button
+          type="button"
+          :class="['picker-item', { 'picker-item--active': !currentAgentId }]"
+          @click.stop="onSelect(autoRouteAgent)"
+        >
+          <span class="picker-item__name">{{ autoRouteAgent.name }}</span>
+          <t-icon v-if="!currentAgentId" name="check" class="picker-item__check" />
+        </button>
         <button
           v-for="agent in displayAgents"
           :key="agent.id"
@@ -51,6 +59,9 @@ interface DisplayAgent {
 }
 
 const { t } = useI18n()
+const props = withDefaults(defineProps<{ appearance?: 'chip' | 'tool'; toolLabel?: string }>(), {
+  appearance: 'chip',
+})
 const settingsStore = useSettingsStore()
 const chatResources = useChatResourcesStore()
 
@@ -58,7 +69,12 @@ const dropdownVisible = ref(false)
 const rootRef = ref<HTMLElement | null>(null)
 const dropdownStyle = ref<Record<string, string>>({})
 
-const currentAgentId = computed(() => settingsStore.selectedAgentId || BUILTIN_QUICK_ANSWER_ID)
+const currentAgentId = computed(() => settingsStore.selectedAgentId)
+
+const autoRouteAgent: DisplayAgent = {
+  id: '',
+  name: t('videohub.agentPicker.autoRoute'),
+}
 
 const displayAgents = computed<DisplayAgent[]>(() => {
   return ALLOWED_IDS.map(id => {
@@ -71,7 +87,10 @@ const displayAgents = computed<DisplayAgent[]>(() => {
         id,
         name: apiAgent.name,
         agentMode: apiAgent.config?.agent_mode,
-        sourceTenantId: apiAgent.tenant_id ? String(apiAgent.tenant_id) : null,
+        // `tenant_id` identifies an own agent's workspace. It is not a
+        // shared-agent source selector; sending it makes the backend skip
+        // the own-agent lookup and require an explicit share relation.
+        sourceTenantId: null,
       }
     }
     return { id, name: t('videohub.agentPicker.customAgent'), sourceTenantId: null }
@@ -80,7 +99,7 @@ const displayAgents = computed<DisplayAgent[]>(() => {
 
 const currentAgentName = computed(() => {
   const current = displayAgents.value.find(a => a.id === currentAgentId.value)
-  return current?.name || t('videohub.agentPicker.quickAnswer')
+  return current?.name || autoRouteAgent.name
 })
 
 const emit = defineEmits<{ select: [agentId: string] }>()
@@ -167,6 +186,31 @@ function onSelect(agent: DisplayAgent) {
 
 .picker-chip:hover {
   background: var(--td-bg-color-secondarycontainer-hover);
+}
+
+.picker-chip--tool {
+  height: 30px;
+  padding: 0 8px;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--td-radius-medium);
+  color: var(--td-text-color-secondary);
+  background: transparent;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.picker-chip--tool:hover {
+  color: var(--td-text-color-primary);
+  background: rgba(0, 0, 0, .06);
+}
+
+.picker-chip--tool :deep(.t-icon) {
+  font-size: 15px;
+}
+
+.picker-chip--tool .picker-chip__label {
+  max-width: 120px;
 }
 
 .picker-chip__label {

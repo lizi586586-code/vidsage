@@ -7,6 +7,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/modelcontext"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 // prepareMessagesWithModelContext replaces positional retrieval IDs with
@@ -21,9 +22,14 @@ func prepareMessagesWithModelContext(
 	if chatManage == nil {
 		return nil, registry
 	}
+	videoevidence.EnrichReferences(chatManage.MergeResult)
+	protocolPrompt := registry.ProtocolPrompt()
+	if videoevidence.Supports(chatManage.VideoEvidenceCitation) {
+		protocolPrompt += videoevidence.ProtocolPrompt()
+	}
 	messages := prepareMessagesWithHistory(chatManage)
 	if len(messages) > 0 {
-		messages[0].Content = strings.TrimRight(messages[0].Content, " \t\r\n") + registry.ProtocolPrompt()
+		messages[0].Content = strings.TrimRight(messages[0].Content, " \t\r\n") + protocolPrompt
 	}
 	if len(chatManage.MergeResult) == 0 || len(messages) == 0 {
 		return messages, registry
@@ -54,6 +60,7 @@ func prepareMessagesWithModelContext(
 			"knowledge_title":   firstPipelineTitle(result),
 			"chunk_index":       result.ChunkIndex,
 			"chunk_type":        result.ChunkType,
+			"metadata":          result.Metadata,
 			"content":           getEnrichedPassageForChat(ctx, result),
 		})
 	}

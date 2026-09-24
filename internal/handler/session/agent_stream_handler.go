@@ -15,6 +15,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 // AgentStreamHandler handles agent events for SSE streaming
@@ -40,6 +41,7 @@ type AgentStreamHandler struct {
 
 	// State tracking
 	knowledgeRefs   []*types.SearchResult
+	evidenceScope   videoevidence.Scope
 	finalAnswer     string
 	answerSegments  []*answerSegment     // Per-answer-event-ID accumulation, so superseded preambles can be dropped
 	eventStartTimes map[string]time.Time // Track start time for duration calculation
@@ -80,6 +82,141 @@ func (h *AgentStreamHandler) composeFinalAnswer() string {
 	return b.String()
 }
 
+func mapSlice(value interface{}) []map[string]interface{} {
+	if value == nil {
+		return nil
+	}
+	var result []map[string]interface{}
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	if err := json.Unmarshal(bytes, &result); err != nil {
+		return nil
+	}
+	return result
+}
+
+func stringMapValue(values map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(fmt.Sprint(values[key])); value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
+func videoEvidenceReferencesFromToolData(toolName string, data map[string]interface{}) []*types.SearchResult {
+	if data == nil {
+		return nil
+	}
+	displayType := stringMapValue(data, "display_type")
+	if displayType != "grep_results" && displayType != "search_results" &&
+		displayType != "knowledge_chunks_list" &&
+		toolName != agenttools.ToolGrepChunks && toolName != agenttools.ToolKnowledgeSearch &&
+		toolName != agenttools.ToolListKnowledgeChunks {
+		return nil
+	}
+
+	// list_knowledge_chunks returns the authoritative transcript rows under
+	// `chunks`; grep_chunks uses `chunk_results`. Both carry the same
+	// backend-owned evidence metadata, so collect all structured row forms
+	// before projecting video evidence.
+	rows := append(mapSlice(data["chunk_results"]), mapSlice(data["chunks"])...)
+	rows = append(rows, mapSlice(data["knowledge_results"])...)
+	if len(rows) == 0 {
+		rows = mapSlice(data["results"])
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	refs := make([]*types.SearchResult, 0)
+	seen := make(map[string]struct{})
+	for _, row := range rows {
+		ref := searchResultFromMap(row)
+		if ref == nil {
+			continue
+		}
+		if ref.ID == "" {
+			for _, key := range []string{"id", "chunk_id", "faq_id"} {
+				if ref.ID = getString(row, key); ref.ID != "" {
+					break
+				}
+			}
+		}
+		// Some list_knowledge_chunks rows carry the audited locator in the
+		// canonical transcript body instead of a separate metadata map.
+		// Enrich before validating so both representations follow the same
+		// backend-owned parsing path.
+		videoevidence.EnrichSearchResult(ref)
+		candidate, ok := videoevidence.CandidateFromSearchResult(ref)
+		if !ok {
+			continue
+		}
+		if _, exists := seen[candidate.EvidenceSentenceID]; exists {
+			continue
+		}
+		seen[candidate.EvidenceSentenceID] = struct{}{}
+		if ref.ID == "" {
+			ref.ID = candidate.ChunkID
+		}
+		refs = append(refs, ref)
+		if len(refs) >= 20 {
+			return refs
+		}
+	}
+	return refs
+}
+
+func agentRouteMode(agentID string) string {
+	if strings.TrimSpace(agentID) == types.BuiltinQuickAnswerID {
+		return "quick"
+	}
+	return "reasoning"
+}
+
+func projectVideoEvidence(refs []*types.SearchResult) ([]videoevidence.Evidence, string) {
+	return videoevidence.ProjectReferences(refs)
+}
+
+func (h *AgentStreamHandler) appendToolEvidenceReferences(toolName string, data map[string]interface{}) {
+	refs := videoEvidenceReferencesFromToolData(toolName, data)
+	if len(refs) == 0 {
+		return
+	}
+
+	h.mu.Lock()
+	videoevidence.MergeScopes(&h.evidenceScope, videoevidence.ScopeFromReferences(refs))
+	refs = videoevidence.NormalizeReferences(h.evidenceScope, refs)
+	h.knowledgeRefs = videoevidence.MergeReferences(h.knowledgeRefs, refs)
+	if len(h.knowledgeRefs) > 0 {
+		h.assistantMessage.KnowledgeReferences = h.knowledgeRefs
+	}
+	snapshot := append([]*types.SearchResult(nil), h.knowledgeRefs...)
+	h.mu.Unlock()
+
+	if len(snapshot) == 0 {
+		return
+	}
+	projected, coverage := projectVideoEvidence(snapshot)
+	if err := h.streamManager.AppendEvent(h.ctx, h.sessionID, h.assistantMessageID, interfaces.StreamEvent{
+		ID:        fmt.Sprintf("references-%d", time.Now().UnixNano()),
+		Type:      types.ResponseTypeReferences,
+		Content:   "",
+		Done:      false,
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"references":     types.References(snapshot),
+			"route_mode":     agentRouteMode(h.assistantMessage.AgentID),
+			"coverage":       coverage,
+			"video_evidence": projected,
+		},
+	}); err != nil {
+		logger.GetLogger(h.ctx).Error("Append tool evidence references event failed", "error", err)
+	}
+}
+
 // NewAgentStreamHandler creates a new handler for agent SSE streaming
 func NewAgentStreamHandler(
 	ctx context.Context,
@@ -103,6 +240,7 @@ func NewAgentStreamHandler(
 		eventBus:           eventBus,
 		artifactCollector:  artifactCollector,
 		knowledgeRefs:      make([]*types.SearchResult, 0),
+		evidenceScope:      videoevidence.NewScope(),
 		eventStartTimes:    make(map[string]time.Time),
 	}
 }
@@ -270,6 +408,8 @@ func (h *AgentStreamHandler) handleToolResult(ctx context.Context, evt event.Eve
 		metadata[k] = v
 	}
 
+	h.appendToolEvidenceReferences(data.ToolName, data.Data)
+
 	// Append event to stream
 	if err := h.streamManager.AppendEvent(h.ctx, h.sessionID, h.assistantMessageID, interfaces.StreamEvent{
 		ID:        evt.ID,
@@ -394,19 +534,25 @@ func (h *AgentStreamHandler) handleReferences(ctx context.Context, evt event.Eve
 
 	// Extract knowledge references
 	// Try to cast directly to []*types.SearchResult first
+	var incoming []*types.SearchResult
 	if searchResults, ok := data.References.([]*types.SearchResult); ok {
-		h.knowledgeRefs = append(h.knowledgeRefs, searchResults...)
+		incoming = append(incoming, searchResults...)
 	} else if refs, ok := data.References.([]interface{}); ok {
 		// Fallback: convert from []interface{}
 		for _, ref := range refs {
 			if sr, ok := ref.(*types.SearchResult); ok {
-				h.knowledgeRefs = append(h.knowledgeRefs, sr)
+				incoming = append(incoming, sr)
 			} else if refMap, ok := ref.(map[string]interface{}); ok {
 				// Parse from map if needed
-				h.knowledgeRefs = append(h.knowledgeRefs, searchResultFromMap(refMap))
+				incoming = append(incoming, searchResultFromMap(refMap))
 			}
 		}
 	}
+	incoming = videoevidence.EnrichReferences(incoming)
+	videoevidence.MergeScopes(&h.evidenceScope, videoevidence.ScopeFromReferences(incoming))
+	incoming = videoevidence.NormalizeReferences(h.evidenceScope, incoming)
+	h.knowledgeRefs = videoevidence.MergeReferences(h.knowledgeRefs, incoming)
+	projected, coverage := projectVideoEvidence(h.knowledgeRefs)
 
 	// Update assistant message references
 	h.assistantMessage.KnowledgeReferences = h.knowledgeRefs
@@ -419,7 +565,10 @@ func (h *AgentStreamHandler) handleReferences(ctx context.Context, evt event.Eve
 		Done:      false,
 		Timestamp: time.Now(),
 		Data: map[string]interface{}{
-			"references": types.References(h.knowledgeRefs),
+			"references":     types.References(h.knowledgeRefs),
+			"route_mode":     agentRouteMode(h.assistantMessage.AgentID),
+			"coverage":       coverage,
+			"video_evidence": projected,
 		},
 	}); err != nil {
 		logger.GetLogger(h.ctx).Error("Append references event to stream failed", "error", err)
@@ -616,6 +765,18 @@ func (h *AgentStreamHandler) handleComplete(ctx context.Context, evt event.Event
 	if !ok {
 		return nil
 	}
+	// A terminal failure must never be persisted as a completed empty
+	// assistant message. The engine normally supplies a user-facing fallback;
+	// keep this boundary defensive for other failure paths and older agents.
+	if data.Outcome == "failed" && strings.TrimSpace(data.FinalAnswer) == "" {
+		if data.FailureReason == "answer_contract_truncated" {
+			data.FinalAnswer = "回答生成不完整，请重试。"
+		} else if data.FailureReason == "answer_contract_invalid" {
+			data.FinalAnswer = "回答格式校验失败，请重试。"
+		} else {
+			data.FinalAnswer = "回答生成失败，请重试。"
+		}
+	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -632,9 +793,15 @@ func (h *AgentStreamHandler) handleComplete(ctx context.Context, evt event.Event
 			for _, ref := range data.KnowledgeRefs {
 				if sr, ok := ref.(*types.SearchResult); ok {
 					knowledgeRefs = append(knowledgeRefs, sr)
+				} else if refMap, ok := ref.(map[string]interface{}); ok {
+					knowledgeRefs = append(knowledgeRefs, searchResultFromMap(refMap))
 				}
 			}
-			h.assistantMessage.KnowledgeReferences = knowledgeRefs
+			knowledgeRefs = videoevidence.EnrichReferences(knowledgeRefs)
+			videoevidence.MergeScopes(&h.evidenceScope, videoevidence.ScopeFromReferences(knowledgeRefs))
+			knowledgeRefs = videoevidence.NormalizeReferences(h.evidenceScope, knowledgeRefs)
+			h.knowledgeRefs = videoevidence.MergeReferences(h.knowledgeRefs, knowledgeRefs)
+			h.assistantMessage.KnowledgeReferences = h.knowledgeRefs
 		}
 
 		h.assistantMessage.Content += data.FinalAnswer
@@ -720,7 +887,11 @@ func (h *AgentStreamHandler) handleComplete(ctx context.Context, evt event.Event
 		"total_steps":       data.TotalSteps,
 		"total_duration_ms": data.TotalDurationMs,
 		"outcome":           data.Outcome,
+		"route_mode":        agentRouteMode(h.assistantMessage.AgentID),
 	}
+	projected, coverage := projectVideoEvidence(h.knowledgeRefs)
+	completeData["coverage"] = coverage
+	completeData["video_evidence"] = projected
 	if data.FailureReason != "" {
 		completeData["failure_reason"] = data.FailureReason
 	}

@@ -19,6 +19,48 @@ export interface MergeableChatMessage {
   timestamp: string
 }
 
+export type ChatFailureReason =
+  | 'skill_unavailable'
+  | 'reasoning_budget_exceeded'
+  | 'reasoning_timeout'
+  | 'answer_contract_truncated'
+  | 'answer_contract_invalid'
+  | 'empty_response'
+  | 'final_answer_generation_failed'
+  | 'llm_call_failed_after_tool_results'
+  | 'context_cancelled'
+  | 'production_graph_missing_audited_wiki_write'
+
+export function failureMessageForReason(reason?: string) {
+  switch (reason) {
+    case 'answer_contract_truncated':
+      return '回答生成不完整，请重试。'
+    case 'answer_contract_invalid':
+      return '回答格式校验失败，请重试。'
+    case 'empty_response':
+      return '模型没有返回正文，请重试。'
+    case 'reasoning_budget_exceeded':
+      return '推理步骤达到上限，已停止生成，请缩小问题范围后重试。'
+    case 'reasoning_timeout':
+      return '回答生成超时，请重试。'
+    case 'skill_unavailable':
+      return '视频证据能力暂不可用，请稍后重试。'
+    case 'context_cancelled':
+      return '回答生成已取消。'
+    case 'production_graph_missing_audited_wiki_write':
+      return '知识内容尚未完成保存，请重试。'
+    case 'final_answer_generation_failed':
+    case 'llm_call_failed_after_tool_results':
+      return '回答生成失败，请重试。'
+    default:
+      return ''
+  }
+}
+
+export function isChatFailureReason(reason: string): reason is ChatFailureReason {
+  return Boolean(failureMessageForReason(reason))
+}
+
 /**
  * Agent backends may emit a streamed answer and then repeat the same answer
  * in the terminal event with a different event id. The UI renders every

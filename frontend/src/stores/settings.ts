@@ -24,6 +24,7 @@ interface Settings {
   webSearchEnabled: boolean;  // 网络搜索是否启用
   conversationModels: ConversationModels;
   selectedAgentId: string;  // 当前选中的智能体ID
+  selectedAgentExplicit: boolean; // 是否由用户显式选择了智能体
   selectedAgentSourceTenantId: string | null;  // 当使用共享智能体时，来源空间 ID（用于后端 model/KB/MCP 解析）
   autoCheckUpdate?: boolean; // 是否自动检查并下载更新
 }
@@ -103,7 +104,8 @@ const defaultSettings: Settings = {
     rerankModelId: "",
     selectedChatModelId: "",  // 用户当前选择的对话模型ID
   },
-  selectedAgentId: BUILTIN_QUICK_ANSWER_ID,  // 默认选中快速问答模式
+  selectedAgentId: '',  // 默认不人为选择智能体，由视频问答自动路由
+  selectedAgentExplicit: false,
   selectedAgentSourceTenantId: null as string | null,  // 共享智能体来源空间 ID
   autoCheckUpdate: true,
 };
@@ -123,9 +125,9 @@ export const useSettingsStore = defineStore("settings", {
     // Agent 是否启用
     isAgentEnabled: (state) => state.settings.isAgentEnabled || false,
 
-    // 当前是否为内置快速问答（优先看 selectedAgentId，避免与 isAgentEnabled 漂移）
+    // 当前是否为用户显式选择的内置快速问答。
     isQuickAnswerMode: (state) =>
-      (state.settings.selectedAgentId || BUILTIN_QUICK_ANSWER_ID) === BUILTIN_QUICK_ANSWER_ID,
+      state.settings.selectedAgentId === BUILTIN_QUICK_ANSWER_ID,
 
     // 是否走 Agent 流式管线（智能推理 / 自定义 Agent）；快速问答走 RAG 管线
     isAgentStreamMode: (state) =>
@@ -171,7 +173,7 @@ export const useSettingsStore = defineStore("settings", {
     isAutoCheckUpdateEnabled: (state) => state.settings.autoCheckUpdate ?? true,
 
     // 当前选中的智能体ID
-    selectedAgentId: (state) => state.settings.selectedAgentId || BUILTIN_QUICK_ANSWER_ID,
+    selectedAgentId: (state) => state.settings.selectedAgentId || '',
     // 共享智能体来源空间 ID（可选）
     selectedAgentSourceTenantId: (state) => state.settings.selectedAgentSourceTenantId ?? null,
   },
@@ -449,12 +451,15 @@ export const useSettingsStore = defineStore("settings", {
     // 选择智能体（sourceTenantId 仅在使用共享智能体时传入；agentMode 用于自定义智能体判定 quick-answer / smart-reasoning）
     selectAgent(agentId: string, sourceTenantId?: string | null, agentMode?: string) {
       this.settings.selectedAgentId = agentId;
+      this.settings.selectedAgentExplicit = Boolean(agentId);
       this.settings.selectedAgentSourceTenantId = (sourceTenantId != null && sourceTenantId !== "") ? sourceTenantId : null;
       // 智能体配置只决定是否具备网络搜索能力，不替用户决定是否在本轮使用。
       // 每次选择智能体都默认关闭，之后只能由用户从输入框主动开启。
       this.settings.webSearchEnabled = false;
-      // 根据智能体类型自动切换 Agent 模式
-      if (agentId === BUILTIN_QUICK_ANSWER_ID) {
+      // 空选择交给后端自动路由，不携带用户指定的 Agent。
+      if (!agentId) {
+        this.settings.isAgentEnabled = false;
+      } else if (agentId === BUILTIN_QUICK_ANSWER_ID) {
         this.settings.isAgentEnabled = false;
       } else if (agentId === BUILTIN_SMART_REASONING_ID) {
         this.settings.isAgentEnabled = true;
@@ -479,7 +484,7 @@ export const useSettingsStore = defineStore("settings", {
     
     // 获取选中的智能体ID
     getSelectedAgentId(): string {
-      return this.settings.selectedAgentId || BUILTIN_QUICK_ANSWER_ID;
+      return this.settings.selectedAgentId || '';
     },
 
     // —— 会话级输入态恢复 —— //

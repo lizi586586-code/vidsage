@@ -52,9 +52,15 @@ type ChatSourceAudit struct {
 	SessionID          string    `gorm:"type:varchar(64);index" json:"session_id"`
 	Scope              string    `gorm:"type:varchar(16)" json:"scope"`
 	VideoID            string    `gorm:"type:varchar(36);index" json:"video_id"`
+	CapabilityVersion  string    `gorm:"type:varchar(16);index" json:"capability_version"`
+	RouteMode          string    `gorm:"type:varchar(16);index" json:"route_mode"`
+	Coverage           string    `gorm:"type:varchar(16);index" json:"coverage"`
 	SourceMode         string    `gorm:"type:varchar(32)" json:"source_mode"`
 	FallbackUsed       bool      `json:"fallback_used"`
 	ReferencesFound    int       `json:"references_found"`
+	LinkableEvidence   int       `json:"linkable_evidence"`
+	InvalidReferences  int       `json:"invalid_references"`
+	DegradationCode    string    `gorm:"type:varchar(48);index" json:"degradation_code"`
 	WikiPageIDs        string    `gorm:"type:text" json:"wiki_page_ids"`
 	KnowledgeObjectIDs string    `gorm:"type:text" json:"knowledge_object_ids"`
 	TranscriptChunkIDs string    `gorm:"type:text" json:"transcript_chunk_ids"`

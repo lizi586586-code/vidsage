@@ -17,6 +17,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 var knowledgeSearchTool = BaseTool{
@@ -1193,6 +1194,7 @@ func (t *KnowledgeSearchTool) formatOutput(
 	knowledgeTitleMap := make(map[string]string)
 
 	for i, result := range results {
+		videoevidence.EnrichSearchResult(result.SearchResult)
 		var faqMeta *types.FAQChunkMetadata
 		if result.KnowledgeBaseType == types.KnowledgeBaseTypeFAQ {
 			meta, err := t.getFAQMetadata(ctx, result.ID, faqMetadataCache)
@@ -1338,11 +1340,13 @@ func (t *KnowledgeSearchTool) formatOutput(
 			"knowledge_id":        result.KnowledgeID,
 			"knowledge_base_id":   result.KnowledgeBaseID,
 			"knowledge_title":     result.KnowledgeTitle,
+			"chunk_type":          result.ChunkType,
 			"knowledge_metadata":  result.KnowledgeCustomMetadata,
 			"match_type":          result.MatchType,
 			"source_query":        result.SourceQuery,
 			"query_type":          result.QueryType,
 			"knowledge_base_type": result.KnowledgeBaseType,
+			"metadata":            result.Metadata,
 		})
 
 		last := formattedResults[len(formattedResults)-1]

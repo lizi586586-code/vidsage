@@ -13,6 +13,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 	"gorm.io/gorm"
 )
 
@@ -119,8 +120,14 @@ func (t *GrepChunksTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 			Error:   fmt.Sprintf("invalid regex query %q: %v", query, err),
 		}, err
 	}
-	queries := []string{query}
+	queries := titleAwareGrepQueries(query)
 	compiled := []*regexp.Regexp{re}
+	for _, titleQuery := range queries[1:] {
+		titleRe, compileErr := regexp.Compile("(?i)" + titleQuery)
+		if compileErr == nil {
+			compiled = append(compiled, titleRe)
+		}
+	}
 
 	// Result count is controlled by the backend, not the caller — keep it
 	// bounded so the LLM context stays small regardless of regex breadth.
@@ -668,18 +675,19 @@ func (t *GrepChunksTool) aggregateByKnowledge(
 }
 
 type grepChunkResult struct {
-	ChunkID         string  `json:"chunk_id,omitempty"`
-	FAQID           string  `json:"faq_id,omitempty"`
-	KnowledgeID     string  `json:"knowledge_id"`
-	KnowledgeBaseID string  `json:"knowledge_base_id"`
-	KnowledgeTitle  string  `json:"knowledge_title"`
-	ChunkType       string  `json:"chunk_type"`
-	Index           int     `json:"index,omitempty"`
-	ChunkIndex      int     `json:"chunk_index,omitempty"`
-	FAQQuestion     string  `json:"faq_question,omitempty"`
-	TitleMatch      bool    `json:"title_match,omitempty"`
-	MatchSnippet    string  `json:"match_snippet,omitempty"`
-	Score           float64 `json:"score"`
+	ChunkID         string            `json:"chunk_id,omitempty"`
+	FAQID           string            `json:"faq_id,omitempty"`
+	KnowledgeID     string            `json:"knowledge_id"`
+	KnowledgeBaseID string            `json:"knowledge_base_id"`
+	KnowledgeTitle  string            `json:"knowledge_title"`
+	ChunkType       string            `json:"chunk_type"`
+	Index           int               `json:"index,omitempty"`
+	ChunkIndex      int               `json:"chunk_index,omitempty"`
+	FAQQuestion     string            `json:"faq_question,omitempty"`
+	TitleMatch      bool              `json:"title_match,omitempty"`
+	MatchSnippet    string            `json:"match_snippet,omitempty"`
+	Score           float64           `json:"score"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
 }
 
 func buildGrepChunkResults(results []chunkWithTitle, compiled []*regexp.Regexp) []grepChunkResult {
@@ -688,6 +696,14 @@ func buildGrepChunkResults(results []chunkWithTitle, compiled []*regexp.Regexp) 
 	}
 	out := make([]grepChunkResult, 0, len(results))
 	for _, r := range results {
+		evidenceResult := &types.SearchResult{
+			ID:             r.ID,
+			Content:        r.Content,
+			KnowledgeID:    r.KnowledgeID,
+			KnowledgeTitle: r.KnowledgeTitle,
+			Metadata:       make(map[string]string),
+		}
+		videoevidence.EnrichSearchResult(evidenceResult)
 		item := grepChunkResult{
 			KnowledgeID:     r.KnowledgeID,
 			KnowledgeBaseID: r.KnowledgeBaseID,
@@ -696,6 +712,7 @@ func buildGrepChunkResults(results []chunkWithTitle, compiled []*regexp.Regexp) 
 			TitleMatch:      r.TitleMatch,
 			MatchSnippet:    extractChunkMatchSnippet(&r.Chunk, compiled),
 			Score:           r.MatchScore,
+			Metadata:        evidenceResult.Metadata,
 		}
 		if r.ChunkType == types.ChunkTypeFAQ {
 			item.FAQID = r.ID

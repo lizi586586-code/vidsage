@@ -28,9 +28,28 @@ export interface ChatSourceAuditInput {
   session_id: string
   scope: 'global' | 'video'
   video_id?: string
+  capability_version?: 'v1'
+  route_mode?: 'quick' | 'reasoning'
+  coverage?: 'complete' | 'partial' | 'none'
   source_mode: 'wiki' | 'chunk' | 'wiki_and_chunk' | 'none'
   fallback_used: boolean
   references_found: number
+  linkable_evidence?: number
+  invalid_references?: number
+  degradation_code?:
+    | 'no_evidence'
+    | 'partial_coverage'
+    | 'invalid_evidence'
+    | 'skill_unavailable'
+    | 'reasoning_budget_exceeded'
+    | 'reasoning_timeout'
+    | 'answer_contract_truncated'
+    | 'answer_contract_invalid'
+    | 'empty_response'
+    | 'final_answer_generation_failed'
+    | 'llm_call_failed_after_tool_results'
+    | 'context_cancelled'
+    | 'production_graph_missing_audited_wiki_write'
   wiki_page_ids: string[]
   knowledge_object_ids: string[]
   transcript_chunk_ids: string[]

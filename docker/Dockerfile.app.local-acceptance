@@ -1,0 +1,23 @@
+FROM golang:1.26-bookworm AS builder
+
+WORKDIR /src
+RUN printf 'Acquire::Retries "5";\n' > /etc/apt/apt.conf.d/80-retries \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV GOPROXY=https://goproxy.cn,direct \
+    GOSUMDB=off \
+    CGO_ENABLED=1 \
+    GOOS=linux
+
+COPY go.mod go.sum ./
+COPY third_party/anydoc-go/go.mod third_party/anydoc-go/go.mod
+RUN go mod download
+COPY . .
+RUN go build -ldflags="-s -w" -o /out/WeKnora ./cmd/server
+
+FROM wechatopenai/weknora-app:local-acceptance-app
+COPY --from=builder /out/WeKnora /app/WeKnora
+COPY config /app/config
+COPY skills/preloaded /app/skills/preloaded

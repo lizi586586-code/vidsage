@@ -234,6 +234,69 @@ func TestModelOutputGroupsChunksAndReusesAliasAcrossTools(t *testing.T) {
 	require.False(t, strings.Contains(second, "c2"))
 }
 
+func TestModelOutputMarksStructuredTranscriptChunksAsCitationEvidence(t *testing.T) {
+	registry := newSourceRegistry()
+	output := registry.ModelOutput(&types.ToolResult{
+		Success: true,
+		Data: map[string]interface{}{
+			"display_type": "search_results",
+			"results": []map[string]interface{}{
+				{
+					"chunk_id":          "chunk-video-1",
+					"knowledge_id":      "video-doc-1",
+					"knowledge_base_id": "kb-video-1",
+					"knowledge_title":   "视频标题",
+					"chunk_index":       3,
+					"content":           "四步万能提示词公式",
+					"metadata": map[string]string{
+						"source_type":           "transcript",
+						"evidence_sentence_id":  "evs:v1:prompt",
+						"video_id":              "video-1",
+						"video_title":           "视频标题",
+						"start_ms":              "46840",
+						"end_ms":                "90293",
+						"transcript_generation": "generation-1",
+					},
+				},
+			},
+		},
+	})
+
+	require.Contains(t, output, `<evidence type="video_transcript" citation="c1" />`)
+	require.Contains(t, output, `<chunk id="c1"`)
+	require.Equal(t,
+		`<kb doc="视频标题" chunk_id="chunk-video-1" kb_id="kb-video-1" />`,
+		registry.ExpandText(`<ref id="c1"/>`),
+	)
+}
+
+func TestModelOutputDoesNotMarkSummaryChunkAsVideoEvidence(t *testing.T) {
+	registry := newSourceRegistry()
+	output := registry.ModelOutput(&types.ToolResult{
+		Success: true,
+		Data: map[string]interface{}{
+			"display_type": "search_results",
+			"results": []map[string]interface{}{
+				{
+					"chunk_id":   "chunk-summary-1",
+					"chunk_type": "summary",
+					"content":    "总结内容",
+					"metadata": map[string]string{
+						"source_type":           "transcript",
+						"evidence_sentence_id":  "evs:v1:summary",
+						"video_id":              "video-1",
+						"start_ms":              "46840",
+						"end_ms":                "90293",
+						"transcript_generation": "generation-1",
+					},
+				},
+			},
+		},
+	})
+
+	require.NotContains(t, output, `<evidence type="video_transcript"`)
+}
+
 func TestModelOutputRendersKnowledgeMetadataOncePerDocument(t *testing.T) {
 	registry := newSourceRegistry()
 	output := registry.ModelOutput(&types.ToolResult{

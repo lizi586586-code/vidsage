@@ -78,6 +78,8 @@ func TestEmbeddedMigrationsAreComplete(t *testing.T) {
 		"000018_wiki_identity_audits.down.sql",
 		"000019_evidence_sentence_contract.up.sql",
 		"000019_evidence_sentence_contract.down.sql",
+		"000029_video_evidence_audit.up.sql",
+		"000029_video_evidence_audit.down.sql",
 	} {
 		content, err := fs.ReadFile(FS, file)
 		if err != nil {

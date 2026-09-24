@@ -7,7 +7,6 @@ import i18n from '@/i18n'
 import { reloadFontFromStorage } from '@/composables/useFont'
 import { reloadThemeFromStorage } from '@/composables/useTheme'
 import { resetMigrationLatch } from '@/composables/preferenceStorage'
-import { BUILTIN_QUICK_ANSWER_ID } from '@/api/agent'
 import { useChatResourcesStore } from '@/stores/chatResources'
 import { useEditorResourcesStore } from '@/stores/editorResources'
 import { useOrganizationStore } from '@/stores/organization'
@@ -245,7 +244,8 @@ export const useAuthStore = defineStore('auth', () => {
       if (raw) {
         const parsed = JSON.parse(raw)
         if (parsed && typeof parsed === 'object') {
-          parsed.selectedAgentId = BUILTIN_QUICK_ANSWER_ID
+          parsed.selectedAgentId = ''
+          parsed.selectedAgentExplicit = false
           parsed.selectedAgentSourceTenantId = null
           parsed.isAgentEnabled = false
           if (parsed.conversationModels && typeof parsed.conversationModels === 'object') {

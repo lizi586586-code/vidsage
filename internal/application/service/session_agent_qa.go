@@ -12,6 +12,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/rerank"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 // AgentQA performs agent-based question answering with conversation history and streaming support
@@ -272,6 +273,7 @@ func (s *sessionService) buildAgentConfig(
 	customAgent := req.CustomAgent
 	agentConfig := &types.AgentConfig{
 		MaxIterations:               customAgent.Config.MaxIterations,
+		MaxCompletionTokens:         customAgent.Config.MaxCompletionTokens,
 		Temperature:                 customAgent.Config.Temperature,
 		WebSearchEnabled:            customAgent.Config.WebSearchEnabled && req.WebSearchEnabled,
 		WebSearchMaxResults:         customAgent.Config.WebSearchMaxResults,
@@ -284,6 +286,7 @@ func (s *sessionService) buildAgentConfig(
 		MCPAuthWaitTimeout:          customAgent.Config.MCPAuthWaitTimeout,
 		Thinking:                    customAgent.Config.Thinking,
 		CitationEnabled:             customAgent.Config.CitationEnabled,
+		VideoEvidenceCitation:       customAgent.Config.VideoEvidenceCitation,
 		RetrieveKBOnlyWhenMentioned: customAgent.Config.RetrieveKBOnlyWhenMentioned,
 		LLMCallTimeout:              customAgent.Config.LLMCallTimeout,
 		RetainRetrievalHistory:      customAgent.Config.RetainRetrievalHistory,
@@ -301,6 +304,18 @@ func (s *sessionService) buildAgentConfig(
 
 	// Configure skills based on CustomAgentConfig
 	s.configureSkillsFromAgent(ctx, agentConfig, customAgent)
+	// VideoHub's reasoning route uses the validated video answer envelope.
+	// Execution length remains controlled by the agent's normal configuration.
+	if customAgent.ID == types.BuiltinSmartReasoningID &&
+		videoevidence.Supports(customAgent.Config.VideoEvidenceCitation) {
+		agentConfig.AnswerContractEnabled = true
+		// Video answers are buffered until the answer contract validates. Keep
+		// enough completion budget for both model reasoning and the JSON envelope;
+		// preserve a higher operator-configured value when one is present.
+		if agentConfig.MaxCompletionTokens < 8192 {
+			agentConfig.MaxCompletionTokens = 8192
+		}
+	}
 
 	// Resolve knowledge bases using shared helper
 	kbIDs, knowledgeIDs, err := s.resolveKnowledgeBases(ctx, req)

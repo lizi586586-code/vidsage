@@ -14,6 +14,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 var regThinkTags = regexp.MustCompile(`(?s)<think>.*?</think>`)
@@ -176,7 +177,7 @@ func loadAndProcessHistory(
 			}
 		} else {
 			h.Answer = regThinkTags.ReplaceAllString(message.Content, "")
-			h.KnowledgeReferences = message.KnowledgeReferences
+			h.KnowledgeReferences = videoevidence.EnrichReferences(message.KnowledgeReferences)
 		}
 		historyMap[message.RequestID] = h
 	}

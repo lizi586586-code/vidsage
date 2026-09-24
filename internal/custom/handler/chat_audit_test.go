@@ -26,9 +26,15 @@ func TestChatSourceAuditIsIdempotent(t *testing.T) {
 			"event_id":"event-1",
 			"session_id":"session-1",
 			"scope":"video",
+			"capability_version":"v1",
+			"route_mode":"quick",
+			"coverage":"partial",
 			"source_mode":"wiki_and_chunk",
 			"fallback_used":false,
 			"references_found":2,
+			"linkable_evidence":1,
+			"invalid_references":1,
+			"degradation_code":"invalid_evidence",
 			"wiki_page_ids":["page-1"],
 			"knowledge_object_ids":["object-1"],
 			"transcript_chunk_ids":["chunk-1"]
@@ -47,7 +53,10 @@ func TestChatSourceAuditIsIdempotent(t *testing.T) {
 	if err := db.Find(&audits).Error; err != nil {
 		t.Fatalf("load audits: %v", err)
 	}
-	if len(audits) != 1 || audits[0].EventID != "event-1" || audits[0].SourceMode != "wiki_and_chunk" {
+	if len(audits) != 1 || audits[0].EventID != "event-1" || audits[0].SourceMode != "wiki_and_chunk" ||
+		audits[0].CapabilityVersion != "v1" || audits[0].Coverage != "partial" ||
+		audits[0].LinkableEvidence != 1 || audits[0].InvalidReferences != 1 ||
+		audits[0].DegradationCode != "invalid_evidence" {
 		t.Fatalf("audits = %#v", audits)
 	}
 }
@@ -66,6 +75,43 @@ func TestChatSourceAuditRejectsInvalidSourceMode(t *testing.T) {
 	NewChatAuditHandler(db).RecordSourceAudit(ctx)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestChatSourceAuditRejectsUnknownCapabilityMetric(t *testing.T) {
+	db := openTestVideoDB(t)
+	if err := db.AutoMigrate(&model.ChatSourceAudit{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/custom/chat/source-audit", strings.NewReader(`{
+		"event_id":"event-1","session_id":"session-1","capability_version":"v2"
+	}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	NewChatAuditHandler(db).RecordSourceAudit(ctx)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestChatSourceAuditAcceptsAnswerFailureDegradationCode(t *testing.T) {
+	db := openTestVideoDB(t)
+	if err := db.AutoMigrate(&model.ChatSourceAudit{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/custom/chat/source-audit", strings.NewReader(`{
+		"event_id":"event-1",
+		"session_id":"session-1",
+		"source_mode":"none",
+		"degradation_code":"answer_contract_truncated"
+	}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	NewChatAuditHandler(db).RecordSourceAudit(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", recorder.Code, recorder.Body.String())
 	}
 }
 

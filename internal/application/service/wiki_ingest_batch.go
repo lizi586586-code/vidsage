@@ -510,6 +510,7 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 						RetractDocContent: op.DocSummary,
 						DocTitle:          op.DocTitle,
 						KnowledgeID:       op.KnowledgeID,
+						SourceRef:         op.KnowledgeID,
 						Language:          types.ResolveLanguageName(ctx, op.Language),
 					})
 				}
@@ -1828,6 +1829,7 @@ func (s *wikiIngestService) mapOneDocument(
 				RetractDocContent: priorContribution,
 				DocTitle:          docTitle,
 				KnowledgeID:       knowledgeID,
+				SourceRef:         sourceRef,
 				Language:          lang,
 			})
 			continue
@@ -1839,6 +1841,7 @@ func (s *wikiIngestService) mapOneDocument(
 			RetractDocContent: content,
 			DocTitle:          docTitle,
 			KnowledgeID:       knowledgeID,
+			SourceRef:         sourceRef,
 			Language:          lang,
 		})
 	}
@@ -1994,6 +1997,93 @@ func resolveSlugUpdateLanguage(ctx context.Context, updates []SlugUpdate) string
 		}
 	}
 	return types.LanguageNameFromContext(ctx)
+}
+
+// reconcileCasePageMetadata maintains the source-level case classification for
+// a concept page. Retractions are applied first, then current concept
+// additions are applied so a re-ingest can replace an old case judgement with
+// the latest judgement from the same source without losing other sources'
+// classifications.
+func reconcileCasePageMetadata(page *types.WikiPage, updates []SlugUpdate) bool {
+	if page == nil || page.PageType != types.WikiPageTypeConcept {
+		return false
+	}
+
+	metadata, err := page.PageMetadata.Map()
+	if err != nil {
+		return false
+	}
+	if metadata == nil {
+		metadata = make(map[string]interface{})
+	}
+	before, _ := json.Marshal(metadata)
+
+	caseRefs := make(map[string]bool)
+	for _, ref := range metadataStringSlice(metadata["case_source_refs"]) {
+		if ref != "" {
+			caseRefs[ref] = true
+		}
+	}
+
+	for _, update := range updates {
+		if (update.Type != "retract" && update.Type != "retractStale") || update.SourceRef == "" {
+			continue
+		}
+		delete(caseRefs, update.SourceRef)
+	}
+	for _, update := range updates {
+		if update.Type != types.WikiPageTypeConcept || update.SourceRef == "" {
+			continue
+		}
+		if update.Item.isCaseConcept() {
+			caseRefs[update.SourceRef] = true
+		} else {
+			delete(caseRefs, update.SourceRef)
+		}
+	}
+
+	orderedRefs := make([]string, 0, len(caseRefs))
+	for ref := range caseRefs {
+		orderedRefs = append(orderedRefs, ref)
+	}
+	sort.Strings(orderedRefs)
+	if len(orderedRefs) == 0 {
+		delete(metadata, "sub_type")
+		delete(metadata, "sub_type_version")
+		delete(metadata, "case_source_refs")
+	} else {
+		metadata["sub_type"] = wikiCaseSubType
+		metadata["sub_type_version"] = wikiCaseSubTypeVersion
+		metadata["case_source_refs"] = orderedRefs
+	}
+
+	after, _ := json.Marshal(metadata)
+	if string(before) == string(after) {
+		return false
+	}
+	if len(metadata) == 0 {
+		page.PageMetadata = nil
+	} else {
+		page.PageMetadata = types.JSON(after)
+	}
+	return true
+}
+
+func metadataStringSlice(raw interface{}) []string {
+	switch values := raw.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []interface{}:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // reduceSlugUpdates returns:
@@ -2433,6 +2523,7 @@ func (s *wikiIngestService) reduceSlugUpdates(
 		// the existing refs; addition rounds append the newly-cited chunks
 		// on top of what was already there, deduplicated.
 		page.ChunkRefs = mergeChunkRefs(page.ChunkRefs, additions)
+		reconcileCasePageMetadata(page, updates)
 		if exists {
 			var stored *types.WikiPage
 			stored, err = s.wikiService.UpdatePage(ctx, page)

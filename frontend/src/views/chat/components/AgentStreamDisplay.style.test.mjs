@@ -39,6 +39,15 @@ test('streaming log renders reasoning alongside tool calls', () => {
   assert.match(source, /if \(!isConversationDone\.value\)\s*\{\s*return result;\s*\}/)
 })
 
+test('streaming thinking stays collapsed until the user expands it', () => {
+  const watcher = source.slice(
+    source.indexOf('watch(eventStream'),
+    source.indexOf('// Once the steps collapse'),
+  )
+  assert.doesNotMatch(watcher, /expandedEvents\.value\.(add|delete)/)
+  assert.match(source, /const toggleEvent = \(eventId: string\) => \{[\s\S]*expandedEvents\.value\.has\(eventId\)/)
+})
+
 test('expanded model reasoning stays inline without a separate thinking title', () => {
   assert.match(source, /class="thinking-inline-content markdown-content"/)
   assert.match(source, /class="thinking-inline-markdown" v-html="renderThinkingMarkdownContent\(event\.content\)"/)

@@ -47,6 +47,9 @@ func TestChatScopeGlobalReturnsConfiguredTenant(t *testing.T) {
 	if payload.Data.SessionMeta["tenant_id"] != "10000" {
 		t.Fatalf("session_meta.tenant_id = %q, want 10000", payload.Data.SessionMeta["tenant_id"])
 	}
+	if payload.Data.ExecutionScope != "global_videos" {
+		t.Fatalf("execution_scope = %q, want global_videos", payload.Data.ExecutionScope)
+	}
 }
 
 func TestChatScopeGlobalIncludesKnowledgeAndEvidenceLayers(t *testing.T) {
@@ -68,6 +71,32 @@ func TestChatScopeGlobalIncludesKnowledgeAndEvidenceLayers(t *testing.T) {
 	}
 	if got, want := payload.Data.KnowledgeBaseIDs, []string{"knowledge-kb", "evidence-kb"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("knowledge_base_ids = %#v, want %#v", got, want)
+	}
+}
+
+func TestChatScopeQueryNeverResolvesSemanticVideoTitles(t *testing.T) {
+	db := openTestVideoDB(t)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/custom/chat/scope/query?query=请比较《视频一》和《视频二》",
+		nil,
+	)
+
+	NewChatScopeHandler(db, "knowledge-kb", "agent-1", "10000").Query(context)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Data ChatScopeResponse `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Data.ExecutionScope != "global_videos" || len(payload.Data.KnowledgeIDs) != 0 {
+		t.Fatalf("query scope = %#v, want global execution scope without selected videos", payload.Data)
 	}
 }
 
@@ -131,6 +160,9 @@ func TestChatScopeVideoReturnsCompletedTranscriptKnowledgeAndSourceMeta(t *testi
 	}
 	if payload.Data.Scope != "video" || payload.Data.VideoID != video.ID || payload.Data.VideoTitle != video.Title {
 		t.Fatalf("unexpected scope data: %#v", payload.Data)
+	}
+	if payload.Data.ExecutionScope != "current_video" {
+		t.Fatalf("execution_scope = %q, want current_video", payload.Data.ExecutionScope)
 	}
 	if payload.Data.AgentID != "agent-1" {
 		t.Fatalf("agent_id = %q, want agent-1", payload.Data.AgentID)

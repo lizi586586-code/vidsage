@@ -161,6 +161,86 @@ func TestProjectReferencesAcceptanceCoverageMatrix(t *testing.T) {
 	}
 }
 
+func TestValidateComparisonAnswerRequiresTwoBlocksAndTwoVideos(t *testing.T) {
+	query := "请比较《视频一》和《视频二》的定义"
+	contract := AnswerContract{
+		Blocks: []AnswerBlock{
+			{Type: "comparison"},
+			{Type: "summary"},
+		},
+	}
+	oneVideo := AnswerProjection{Evidence: []Evidence{{VideoID: "video-1"}}}
+	require.Error(t, ValidateComparisonAnswer(query, contract, oneVideo))
+
+	contract.Blocks = append(contract.Blocks, AnswerBlock{Type: "comparison"})
+	require.NoError(t, ValidateComparisonAnswer(query, contract, AnswerProjection{
+		Evidence: []Evidence{{VideoID: "video-1"}, {VideoID: "video-2"}},
+	}))
+}
+
+func TestValidateComparisonAnswerUsesTaskSemanticsWithoutParsingTitles(t *testing.T) {
+	contract := AnswerContract{
+		Blocks: []AnswerBlock{
+			{Type: "evidence"},
+		},
+	}
+	err := ValidateComparisonAnswer("两个视频分别在哪一部分提到了提示词模板？", contract, AnswerProjection{
+		Evidence: []Evidence{{VideoID: "video-1"}},
+	})
+	if got := answerErrorCode(err); got != AnswerErrorMissingVideoCoverage {
+		t.Fatalf("error code = %q, want %q", got, AnswerErrorMissingVideoCoverage)
+	}
+}
+
+func TestValidateComparisonAnswerRequiresLocationTableAfterThreeLocations(t *testing.T) {
+	contract := AnswerContract{
+		ContentMarkdown: "定位如下。",
+		Blocks: []AnswerBlock{{
+			Type:         "evidence",
+			TextMarkdown: "第一处 <ref id=\"c1\"/> 第二处 <ref id=\"c2\"/> 第三处 <ref id=\"c3\"/> 第四处 <ref id=\"c4\"/>",
+		}},
+	}
+	projection := AnswerProjection{Evidence: []Evidence{
+		{EvidenceSentenceID: "e1", VideoID: "v1"},
+		{EvidenceSentenceID: "e2", VideoID: "v1"},
+		{EvidenceSentenceID: "e3", VideoID: "v1"},
+		{EvidenceSentenceID: "e4", VideoID: "v1"},
+	}}
+	projection.RenderedMarkdown = RenderAnswerContract(contract)
+	require.Equal(t, AnswerErrorMissingVideoTable, answerErrorCode(ValidateComparisonAnswer("请定位相关内容", contract, projection)))
+
+	contract.Blocks[0].TextMarkdown = "| 定位 | 核心主旨 |\n| --- | --- |\n| 第一处完整定位句 <ref id=\"c1\"/> | 主旨一 |\n| 第二处完整定位句 <ref id=\"c2\"/> | 主旨二 |\n| 第三处完整定位句 <ref id=\"c3\"/> | 主旨三 |\n| 第四处完整定位句 <ref id=\"c4\"/> | 主旨四 |"
+	projection.RenderedMarkdown = RenderAnswerContract(contract)
+	require.NoError(t, ValidateComparisonAnswer("请定位相关内容", contract, projection))
+}
+
+func TestProjectAnswerContractRepairsMissingVideoLocationTableWithoutModelRetry(t *testing.T) {
+	contract := AnswerContract{
+		SchemaVersion:   AnswerContractVersion,
+		Mode:            AnswerModeReasoning,
+		Coverage:        AnswerCoverageComplete,
+		ContentMarkdown: "四处内容共同说明了提示词和上下文的关系。",
+		Blocks: []AnswerBlock{
+			{Type: "evidence", Title: "角色设定", TextMarkdown: "角色设定明确 AI 的身份和任务 <ref id=\"c1\"/>。", EvidenceRefs: []string{"c1"}},
+			{Type: "evidence", Title: "提示词公式", TextMarkdown: "公式还需要补充背景和输出要求 <ref id=\"c2\"/>。", EvidenceRefs: []string{"c2"}},
+			{Type: "evidence", Title: "上下文窗口", TextMarkdown: "上下文窗口限制单次对话容量 <ref id=\"c3\"/>。", EvidenceRefs: []string{"c3"}},
+			{Type: "evidence", Title: "失忆原因", TextMarkdown: "新对话不会自动继承旧上下文 <ref id=\"c4\"/>。", EvidenceRefs: []string{"c4"}},
+		},
+	}
+	handles := map[string]Evidence{
+		"c1": {EvidenceSentenceID: "e1", VideoID: "v1", SourceType: SourceTypeTranscript, Linkable: true},
+		"c2": {EvidenceSentenceID: "e2", VideoID: "v1", SourceType: SourceTypeTranscript, Linkable: true},
+		"c3": {EvidenceSentenceID: "e3", VideoID: "v2", SourceType: SourceTypeTranscript, Linkable: true},
+		"c4": {EvidenceSentenceID: "e4", VideoID: "v2", SourceType: SourceTypeTranscript, Linkable: true},
+	}
+
+	projection, err := ProjectAnswerContract(contract, handles)
+	require.NoError(t, err)
+	require.NoError(t, ValidateComparisonAnswer("两个视频分别在哪里讲的", contract, projection))
+	require.Contains(t, projection.RenderedMarkdown, "| 定位 | 核心主旨 |")
+	require.Contains(t, projection.RenderedMarkdown, `<ref id="c4"/>`)
+}
+
 func TestNormalizeCandidateClassifiesStableFailures(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -391,6 +471,26 @@ func TestEnrichSearchResultReadsCanonicalTranscriptMetadataOnly(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "video-1", candidate.VideoID)
 	require.Equal(t, "evs:v1:one", candidate.EvidenceSentenceID)
+	require.Equal(t, 1000, *candidate.StartMs)
+	require.Equal(t, 3000, *candidate.EndMs)
+}
+
+func TestEnrichSearchResultReadsBackendKnowledgeMetadataWhenChunkBodyIsSplit(t *testing.T) {
+	result := &types.SearchResult{
+		ID:             "chunk-1",
+		ChunkType:      types.ChunkTypeText,
+		KnowledgeTitle: "测试视频",
+		Content:        "## 视频定位信息\n```json\n{\"evidence_sentence_id\":\"evs:v1:split\"\n",
+		Metadata: map[string]string{
+			"content": "## 视频定位信息\n\n```json\n{\"video_id\":\"video-1\",\"evidence_sentence_id\":\"evs:v1:split\",\"start_ms\":1000,\"end_ms\":3000,\"transcript_generation\":\"generation-1\"}\n```\n\n## 原文\n真实内容",
+		},
+	}
+
+	EnrichSearchResult(result)
+	candidate, ok := CandidateFromSearchResult(result)
+	require.True(t, ok)
+	require.Equal(t, "video-1", candidate.VideoID)
+	require.Equal(t, "evs:v1:split", candidate.EvidenceSentenceID)
 	require.Equal(t, 1000, *candidate.StartMs)
 	require.Equal(t, 3000, *candidate.EndMs)
 }

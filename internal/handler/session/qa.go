@@ -68,6 +68,7 @@ type qaRequestContext struct {
 	// into directly loadable URLs when the caller asks for `resource_urls=public`.
 	// Disabled (a pass-through) in the default handle mode.
 	resourceRewriter *storageurl.StreamRewriter
+	route            routeMetadata
 
 	// Snapshot of the request fields needed to persist the input-bar state
 	// for session restoration. Kept verbatim from the request so we record
@@ -75,6 +76,47 @@ type qaRequestContext struct {
 	reqAgentEnabled bool
 	reqAgentID      string
 	autoRoute       bool
+}
+
+// routeMetadata is backend-owned routing state carried through one request.
+// Model-provided intent/scope values are exposed only when the route contract
+// validated successfully; fallback runs retain an explicit error status.
+type routeMetadata struct {
+	AutoRoute            bool
+	Mode                 string
+	Intent               string
+	IntentStatus         string
+	ScopeHint            string
+	ExecutionScope       string
+	RequiredCapabilities []string
+	EffectiveScope       string
+	EffectiveScopeStatus string
+	SchemaValid          bool
+	ErrorCode            string
+	AgentID              string
+}
+
+func trustedExecutionScope(requested string, knowledgeBaseIDs, knowledgeIDs []string) (string, string) {
+	// The client can only echo the scope returned by the scope endpoint. Treat
+	// it as descriptive after authorization, never as a video selector. Any
+	// mismatch falls back to the narrower server-observed target boundary.
+	switch strings.TrimSpace(requested) {
+	case "current_video":
+		if len(knowledgeIDs) > 0 {
+			return "current_video", "computed"
+		}
+	case "global_videos":
+		if len(knowledgeBaseIDs) > 0 && len(knowledgeIDs) == 0 {
+			return "global_videos", "computed"
+		}
+	}
+	if len(knowledgeIDs) > 0 {
+		return "selected_knowledge", "computed"
+	}
+	if len(knowledgeBaseIDs) > 0 {
+		return "selected_knowledge_bases", "computed"
+	}
+	return "", "not_exposed"
 }
 
 // buildQARequest converts the qaRequestContext into a types.QARequest for service invocation.
@@ -187,8 +229,14 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	// original agent ID is used for signed content-pipeline validation below;
 	// the resolved ID is only the execution target for this turn.
 	provenanceAgentID := request.AgentID
+	routeInfo := routeMetadata{
+		AutoRoute:            false,
+		IntentStatus:         "not_applicable",
+		EffectiveScopeStatus: "not_applicable",
+	}
 	if request.AutoRoute && request.AgentID == "" && request.AgentSourceTenantID == 0 {
-		routeDecision := h.routeAgent(ctx, request.Query, session, request.SummaryModelID)
+		executionScope, executionScopeStatus := trustedExecutionScope(request.ExecutionScope, kbIDs, knowledgeIDs)
+		routeDecision := h.routeAgent(ctx, request.Query, session, request.SummaryModelID, executionScope)
 		if routeDecision.Mode == routeModeQuick {
 			request.AgentID = types.BuiltinQuickAnswerID
 		} else {
@@ -198,6 +246,24 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		customAgent, effectiveTenantID, sharedAgentReadOnly = h.resolveAgent(ctx, c, request.AgentID, 0)
 		if customAgent == nil {
 			return nil, nil, errors.NewBadRequestError("自动路由目标智能体不可用")
+		}
+		routeInfo = routeMetadata{
+			AutoRoute:            true,
+			Mode:                 routeDecision.Mode,
+			Intent:               routeDecision.Intent,
+			IntentStatus:         "exposed",
+			ScopeHint:            routeDecision.ScopeHint,
+			ExecutionScope:       executionScope,
+			RequiredCapabilities: append([]string(nil), routeDecision.RequiredCapabilities...),
+			EffectiveScope:       executionScope,
+			EffectiveScopeStatus: executionScopeStatus,
+			SchemaValid:          routeDecision.SchemaValid,
+			ErrorCode:            routeDecision.RouteErrorCode,
+			AgentID:              request.AgentID,
+		}
+		if !routeDecision.SchemaValid {
+			routeInfo.Intent = ""
+			routeInfo.IntentStatus = "not_exposed"
 		}
 		logger.Infof(ctx, "Auto-routed session=%s query to mode=%s intent=%s scope_hint=%s reason=%s agent=%s", sessionID, routeDecision.Mode, routeDecision.Intent, routeDecision.ScopeHint, routeDecision.ReasonCode, request.AgentID)
 	}
@@ -442,6 +508,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		reqAgentID:            request.AgentID,
 		autoRoute:             request.AutoRoute,
 		resourceRewriter:      resourceRewriter,
+		route:                 routeInfo,
 	}
 
 	return reqCtx, &request, nil
@@ -762,7 +829,8 @@ func (h *Handler) setupSSEStream(reqCtx *qaRequestContext, generateTitle bool) *
 
 	// Setup stream handler
 	h.setupStreamHandler(asyncCtx, reqCtx.sessionID, reqCtx.assistantMessage.ID,
-		reqCtx.requestID, reqCtx.session.TenantID, reqCtx.receivedAt, reqCtx.assistantMessage, eventBus)
+		reqCtx.requestID, reqCtx.session.TenantID, reqCtx.receivedAt, reqCtx.assistantMessage,
+		reqCtx.route, eventBus)
 
 	// Generate title if needed
 	if generateTitle && reqCtx.session.Title == "" {

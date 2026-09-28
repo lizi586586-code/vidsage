@@ -54,6 +54,10 @@ type ChatEvidenceItem struct {
 	ErrorCode            string `json:"error_code,omitempty"`
 }
 
+type chatEvidenceRequest struct {
+	KnowledgeIDs []string `json:"knowledge_ids"`
+}
+
 func NewChatEvidenceHandler(db *gorm.DB, resolvers ...chatEvidenceChunkResolver) *ChatEvidenceHandler {
 	handler := &ChatEvidenceHandler{db: db}
 	if len(resolvers) > 0 {
@@ -77,7 +81,11 @@ func NewChatEvidenceHandlerWithWiki(
 }
 
 func (h *ChatEvidenceHandler) Lookup(c *gin.Context) {
-	ids := splitQueryValues(c.Query("knowledge_ids"))
+	ids, err := chatEvidenceIDs(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid evidence lookup request"})
+		return
+	}
 	if len(ids) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "knowledge_ids is required"})
 		return
@@ -247,6 +255,18 @@ func (h *ChatEvidenceHandler) Lookup(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": items})
+}
+
+func chatEvidenceIDs(c *gin.Context) ([]string, error) {
+	if c.Request.Method != http.MethodPost {
+		return splitQueryValues(c.Query("knowledge_ids")), nil
+	}
+
+	var request chatEvidenceRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		return nil, err
+	}
+	return splitQueryValues(strings.Join(request.KnowledgeIDs, ",")), nil
 }
 
 type chatEvidenceWikiFallback struct {

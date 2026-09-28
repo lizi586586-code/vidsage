@@ -60,12 +60,14 @@ type AnswerContractError struct {
 type AnswerErrorCode string
 
 const (
-	AnswerErrorInvalidJSON      AnswerErrorCode = "invalid_json"
-	AnswerErrorUnknownField     AnswerErrorCode = "unknown_field"
-	AnswerErrorTrailingContent  AnswerErrorCode = "trailing_content"
-	AnswerErrorTruncatedOutput  AnswerErrorCode = "truncated_output"
-	AnswerErrorInvalidContract  AnswerErrorCode = "invalid_contract"
-	AnswerErrorEvidenceOutScope AnswerErrorCode = "evidence_out_of_scope"
+	AnswerErrorInvalidJSON          AnswerErrorCode = "invalid_json"
+	AnswerErrorUnknownField         AnswerErrorCode = "unknown_field"
+	AnswerErrorTrailingContent      AnswerErrorCode = "trailing_content"
+	AnswerErrorTruncatedOutput      AnswerErrorCode = "truncated_output"
+	AnswerErrorInvalidContract      AnswerErrorCode = "invalid_contract"
+	AnswerErrorEvidenceOutScope     AnswerErrorCode = "evidence_out_of_scope"
+	AnswerErrorMissingVideoCoverage AnswerErrorCode = "missing_video_coverage"
+	AnswerErrorMissingVideoTable    AnswerErrorCode = "missing_video_table"
 )
 
 func (e *AnswerContractError) Error() string {
@@ -300,6 +302,10 @@ func ProjectAnswerContractWithOrdinaryHandles(
 	handles map[string]Evidence,
 	ordinaryHandles map[string]struct{},
 ) (AnswerProjection, error) {
+	if err := validateAnswerContractShape(contract); err != nil {
+		return AnswerProjection{}, err
+	}
+	contract = ensureVideoLocationTable(contract, handles)
 	if err := validateAnswerContractShape(contract); err != nil {
 		return AnswerProjection{}, err
 	}

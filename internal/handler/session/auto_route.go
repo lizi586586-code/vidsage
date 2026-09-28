@@ -43,6 +43,10 @@ const autoRouteSystemPrompt = `你是 VideoHub 问题路由器。你的唯一任
 6. 如果仅凭本轮问题无法判断，结合必要的会话上下文；仍无法确定时选择 reasoning。
 
 只能使用输入中的上下文判断，不得创建视频名称、视频 ID、证据 ID 或时间。
+
+输出协议（video-chat-route/v1）是唯一允许的格式。必须输出一个 JSON 对象，且只能包含以下字段：
+{"schema_version":"video-chat-route/v1","mode":"quick|reasoning","intent":"quick_fact|location|summary|explanation|comparison|application|learning_plan","scope_hint":"current_video|global_videos","required_capabilities":["video_evidence"],"reason_code":"explicit_location_question|explicit_fact_question|multi_video_synthesis|comparison_request|application_request|context_dependent_followup|uncertain"}
+其中 mode、intent、scope_hint、reason_code 必须使用枚举值；required_capabilities 必须恰好包含 video_evidence。scope_hint 只能表达语义上的当前页/全局提示，不能选择或缩小目标视频集合；可信执行边界以输入中的后端事实为准。
 只输出一个严格 JSON 对象，不要 Markdown、代码围栏、解释或尾随文本。`
 
 type autoRouteDecision struct {
@@ -52,10 +56,20 @@ type autoRouteDecision struct {
 	ScopeHint            string   `json:"scope_hint"`
 	RequiredCapabilities []string `json:"required_capabilities"`
 	ReasonCode           string   `json:"reason_code"`
+	// Runtime-only diagnostics. These fields are never accepted from model JSON.
+	SchemaValid    bool   `json:"-"`
+	RouteErrorCode string `json:"-"`
 }
 
-func buildAutoRoutePrompt(query, contextText string) string {
+func buildAutoRoutePrompt(query, contextText string, executionScopes ...string) string {
+	executionScope := ""
+	if len(executionScopes) > 0 {
+		executionScope = executionScopes[0]
+	}
 	prompt := "当前问题：\n" + strings.TrimSpace(query)
+	if scope := strings.TrimSpace(executionScope); scope != "" {
+		prompt += "\n\n可信执行边界（只用于访问控制，不是目标视频集合）：\n" + scope
+	}
 	if strings.TrimSpace(contextText) != "" {
 		prompt += "\n\n最近会话上下文（仅用于判断问题是否依赖上下文）：\n" + contextText
 	}
@@ -82,7 +96,15 @@ func fallbackAutoRouteDecision() autoRouteDecision {
 		ScopeHint:            "global_videos",
 		RequiredCapabilities: []string{"video_evidence"},
 		ReasonCode:           "uncertain",
+		SchemaValid:          false,
+		RouteErrorCode:       "route_unavailable",
 	}
+}
+
+func fallbackAutoRouteDecisionWithError(code string) autoRouteDecision {
+	decision := fallbackAutoRouteDecision()
+	decision.RouteErrorCode = code
+	return decision
 }
 
 func parseAutoRouteDecision(raw string) (autoRouteDecision, error) {
@@ -108,15 +130,40 @@ func parseAutoRouteDecision(raw string) (autoRouteDecision, error) {
 		!allowedRouteReasons[decision.ReasonCode] {
 		return autoRouteDecision{}, fmt.Errorf("route output violates protocol")
 	}
+	decision.SchemaValid = true
 	return decision, nil
+}
+
+func routeParseErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "unknown field"):
+		return "unknown_field"
+	case strings.Contains(message, "trailing content"):
+		return "trailing_content"
+	case strings.Contains(message, "unsupported schema_version"):
+		return "schema_version_invalid"
+	case strings.Contains(message, "unsupported mode"):
+		return "mode_invalid"
+	case strings.Contains(message, "violates protocol"):
+		return "schema_invalid"
+	default:
+		return "invalid_json"
+	}
 }
 
 func autoRouteChatOptions() *chat.ChatOptions {
 	thinking := false
 	return &chat.ChatOptions{
 		Temperature: 0,
-		MaxTokens:   128,
-		Thinking:    &thinking,
+		// The route contract is a six-field JSON object. Some providers spend
+		// extra completion tokens around strict JSON, so leave enough headroom
+		// to avoid truncating the closing fields or brace.
+		MaxTokens: 512,
+		Thinking:  &thinking,
 	}
 }
 
@@ -154,8 +201,11 @@ func selectRouteModelID(requestedID string, models []*types.Model) (string, erro
 // routeAgent performs one bounded, non-streaming classification call. Any
 // failure is deliberately converted to reasoning; routing must never block a
 // user's question or produce an unscoped answer.
-func (h *Handler) routeAgent(ctx context.Context, query string, session *types.Session, modelID string) autoRouteDecision {
-	fallback := fallbackAutoRouteDecision()
+func (h *Handler) routeAgent(ctx context.Context, query string, session *types.Session, modelID string, executionScopes ...string) autoRouteDecision {
+	executionScope := ""
+	if len(executionScopes) > 0 {
+		executionScope = executionScopes[0]
+	}
 	routeStartedAt := time.Now()
 	logFailure := func(phase, reason string, err error) {
 		elapsed := time.Since(routeStartedAt).Round(time.Millisecond)
@@ -210,9 +260,9 @@ func (h *Handler) routeAgent(ctx context.Context, query string, session *types.S
 	model, err := h.resolveRouteModel(routeCtx, modelID)
 	if err != nil {
 		logFailure("model_resolve", "model_unavailable", err)
-		return fallback
+		return fallbackAutoRouteDecisionWithError("model_unavailable")
 	}
-	userPrompt := buildAutoRoutePrompt(query, contextText)
+	userPrompt := buildAutoRoutePrompt(query, contextText, executionScope)
 	response, err := model.Chat(routeCtx, []chat.Message{
 		{Role: "system", Content: autoRouteSystemPrompt},
 		{Role: "user", Content: userPrompt},
@@ -227,12 +277,18 @@ func (h *Handler) routeAgent(ctx context.Context, query string, session *types.S
 		} else {
 			logFailure("model_call", "empty_response", nil)
 		}
-		return fallback
+		code := "model_call_error"
+		if err == nil {
+			code = "empty_response"
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			code = "model_call_timeout"
+		}
+		return fallbackAutoRouteDecisionWithError(code)
 	}
 	decision, err := parseAutoRouteDecision(response.Content)
 	if err != nil {
-		logFailure("model_output", "invalid_json", err)
-		return fallback
+		logFailure("model_output", "route_output_invalid", err)
+		return fallbackAutoRouteDecisionWithError(routeParseErrorCode(err))
 	}
 	logger.Infof(ctx, "auto route succeeded mode=%s intent=%s scope_hint=%s reason=%s elapsed=%s",
 		decision.Mode, decision.Intent, decision.ScopeHint, decision.ReasonCode, time.Since(routeStartedAt).Round(time.Millisecond))

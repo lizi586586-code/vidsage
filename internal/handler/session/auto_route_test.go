@@ -21,7 +21,7 @@ func TestBuildAutoRoutePromptIncludesConversationContext(t *testing.T) {
 }
 
 func TestAutoRoutePromptUsesEvidenceComplexityPrinciple(t *testing.T) {
-	for _, want := range []string{"直接证据", "综合结论", "知识点", "视频数量"} {
+	for _, want := range []string{"直接证据", "综合结论", "知识点", "视频数量", "video-chat-route/v1", "required_capabilities"} {
 		if !strings.Contains(autoRouteSystemPrompt, want) {
 			t.Fatalf("system prompt = %q, want principle %q", autoRouteSystemPrompt, want)
 		}
@@ -55,6 +55,25 @@ func TestParseAutoRouteDecision(t *testing.T) {
 	}
 }
 
+func TestRouteParseErrorCodeClassifiesProtocolFailures(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{`{"schema_version":"video-chat-route/v1","extra":1}`, "unknown_field"},
+		{`{"schema_version":"video-chat-route/v1"} trailing`, "trailing_content"},
+		{`not-json`, "invalid_json"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			_, err := parseAutoRouteDecision(tt.raw)
+			if got := routeParseErrorCode(err); got != tt.want {
+				t.Fatalf("routeParseErrorCode() = %q, want %q (err=%v)", got, tt.want, err)
+			}
+		})
+	}
+}
+
 func TestAutoRouteChatOptionsDisableThinking(t *testing.T) {
 	options := autoRouteChatOptions()
 	if options == nil || options.Thinking == nil {
@@ -63,8 +82,39 @@ func TestAutoRouteChatOptionsDisableThinking(t *testing.T) {
 	if *options.Thinking {
 		t.Fatal("auto route classification must disable model thinking")
 	}
-	if options.MaxTokens != 128 {
-		t.Fatalf("auto route max tokens = %d, want 128", options.MaxTokens)
+	if options.MaxTokens != 512 {
+		t.Fatalf("auto route max tokens = %d, want 512", options.MaxTokens)
+	}
+}
+
+func TestBuildAutoRoutePromptLabelsExecutionBoundary(t *testing.T) {
+	prompt := buildAutoRoutePrompt("两个视频分别讲了什么？", "", "global_videos")
+	if !strings.Contains(prompt, "可信执行边界") || !strings.Contains(prompt, "不是目标视频集合") || !strings.Contains(prompt, "global_videos") {
+		t.Fatalf("prompt does not distinguish execution scope from semantic targets: %q", prompt)
+	}
+}
+
+func TestTrustedExecutionScopeNeverTreatsTitlesAsVideoSelection(t *testing.T) {
+	tests := []struct {
+		name       string
+		requested  string
+		kbIDs      []string
+		knowledge  []string
+		wantScope  string
+		wantStatus string
+	}{
+		{"global boundary", "global_videos", []string{"kb-1"}, nil, "global_videos", "computed"},
+		{"current page boundary", "current_video", []string{"kb-1"}, []string{"chunk-1"}, "current_video", "computed"},
+		{"mismatched global request narrows", "global_videos", []string{"kb-1"}, []string{"chunk-1"}, "selected_knowledge", "computed"},
+		{"unknown boundary", "", nil, nil, "", "not_exposed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotScope, gotStatus := trustedExecutionScope(tt.requested, tt.kbIDs, tt.knowledge)
+			if gotScope != tt.wantScope || gotStatus != tt.wantStatus {
+				t.Fatalf("trustedExecutionScope() = (%q, %q), want (%q, %q)", gotScope, gotStatus, tt.wantScope, tt.wantStatus)
+			}
+		})
 	}
 }
 

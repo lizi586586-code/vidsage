@@ -547,7 +547,7 @@ import { getAttachmentParsingSummaryHtml } from '@/utils/attachmentParsingDispla
 import { useChatCitationPopover } from '@/composables/useChatCitationPopover';
 import { useChatReferencesDrawer } from '@/composables/useChatReferencesDrawer';
 import type { KnowledgeReferenceLike, ReferenceHighlightTarget } from '@/utils/referenceSources';
-import { resolveCitationChunkId, shouldShowVideoCitationTitle } from '@/utils/citationMarkdown';
+import { resolveCitationChunkId } from '@/utils/citationMarkdown';
 import { getWikiPage, type WikiPage } from '@/api/wiki';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { useUIStore } from '@/stores/ui';
@@ -1303,7 +1303,8 @@ const eventStream = computed(() => props.session?.agentEventStream || []);
 // Expanded events tracking (for tool calls and thinking events)
 const expandedEvents = ref<Set<string>>(new Set());
 
-// Track IDs of thinking events that are currently "active" (latest, not yet followed by non-thinking)
+// Track IDs of thinking events that are currently "active" for pending-state
+// styling. This set must not control expansion: expansion is user-owned.
 const activeThinkingIds = ref<Set<string>>(new Set());
 // Reactive version number to force template re-evaluation when activeThinkingIds changes
 const activeThinkingVersion = ref(0);
@@ -1314,11 +1315,12 @@ const isThinkingActive = (eventId: string): boolean => {
   return activeThinkingIds.value.has(eventId);
 };
 
-// Watch event stream to auto-expand thinking events and auto-collapse when non-thinking follows
+// Watch the stream to track the active thinking block. Keep expansion state
+// untouched so a thinking card only opens after the user clicks it.
 watch(eventStream, (stream) => {
   if (!stream || !Array.isArray(stream)) return;
 
-  // Scan stream to find thinking events to expand and collapse
+  // Scan the stream to find the trailing thinking block for pending styling.
   const newActiveIds = new Set<string>();
 
   // Walk backwards to find the trailing thinking block
@@ -1333,17 +1335,8 @@ watch(eventStream, (stream) => {
 
     if (inTrailingThinking && isThinking && id) {
       newActiveIds.add(id);
-      // Auto-expand if not yet known
-      expandedEvents.value.add(id);
     } else if (!isThinking) {
       inTrailingThinking = false;
-    }
-  }
-
-  // Collapse thinking events that were active before but are no longer trailing
-  for (const oldId of activeThinkingIds.value) {
-    if (!newActiveIds.has(oldId)) {
-      expandedEvents.value.delete(oldId);
     }
   }
 
@@ -2441,7 +2434,7 @@ const renderAgentMarkdown = (
     sanitizeHtml: sanitizeMarkdownHTML,
     streaming: !isConversationDone.value,
     knowledgeReferences: getReferencesForDrawer(),
-    showVideoTitle: props.showVideoTitle ?? shouldShowVideoCitationTitle(props.userQuery || '', getReferencesForDrawer()),
+    showVideoTitle: props.showVideoTitle ?? false,
     cachedMermaidSvgHtml: streamingMermaidSvgCache.value,
     prepareMarkdown: prepareAgentMarkdown,
     injectCachedMermaidSvg,

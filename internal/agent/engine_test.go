@@ -610,6 +610,7 @@ func TestExecuteLoop_TruncatedAnswerContractProducesVisibleFailure(t *testing.T)
 	model := &mockChat{responses: []mockResponse{
 		{chunks: []types.StreamResponse{{Content: truncated, Done: true, FinishReason: "stop"}}},
 		{chunks: []types.StreamResponse{{Content: truncated, Done: true, FinishReason: "stop"}}},
+		{chunks: []types.StreamResponse{{Content: truncated, Done: true, FinishReason: "stop"}}},
 	}}
 	engine := newTestEngine(t, model)
 	engine.config.AnswerContractEnabled = true
@@ -623,8 +624,30 @@ func TestExecuteLoop_TruncatedAnswerContractProducesVisibleFailure(t *testing.T)
 	require.Equal(t, "failed", state.CompletionStatus)
 	require.Equal(t, "answer_contract_truncated", state.CompletionFailureReason)
 	require.NotEmpty(t, state.FinalAnswer, "failed contract output must never persist as an empty answer")
-	require.Len(t, model.options, 2)
+	require.Len(t, model.options, 3)
 	require.Contains(t, model.calls[1][len(model.calls[1])-1].Content, "blocks 最多 3 个")
+}
+
+func TestExecuteLoop_AnswerContractRetryRepairsBareQuotes(t *testing.T) {
+	invalid := `{"schema_version":"answer_contract/v1","mode":"reasoning","coverage":"complete","content_markdown":"视频一"提示词"","blocks":[{"type":"summary","title":"结论","text_markdown":"已定位。","evidence_refs":[]}]}`
+	valid := `{"schema_version":"answer_contract/v1","mode":"reasoning","coverage":"complete","content_markdown":"视频一《提示词》已定位。","blocks":[{"type":"summary","title":"结论","text_markdown":"已定位。","evidence_refs":[]}]}`
+	model := &mockChat{responses: []mockResponse{
+		{chunks: []types.StreamResponse{{Content: invalid, Done: true, FinishReason: "stop"}}},
+		{chunks: []types.StreamResponse{{Content: valid, Done: true, FinishReason: "stop"}}},
+	}}
+
+	engine := newTestEngine(t, model)
+	engine.config.AnswerContractEnabled = true
+	state := &types.AgentState{}
+
+	_, err := engine.executeLoop(context.Background(), state, "test query",
+		emptyMessages(), emptyTools(), "sess-1", "msg-1")
+	require.NoError(t, err)
+	require.True(t, state.IsComplete)
+	require.Equal(t, "succeeded", state.CompletionStatus)
+	require.Contains(t, state.FinalAnswer, "视频一《提示词》已定位。")
+	require.Len(t, model.calls, 2)
+	require.Contains(t, model.calls[1][len(model.calls[1])-1].Content, "字符串内部不要使用裸双引号")
 }
 
 func TestExecuteLoop_SynthesizedAnswerAfterLLMFailureRemainsFailed(t *testing.T) {

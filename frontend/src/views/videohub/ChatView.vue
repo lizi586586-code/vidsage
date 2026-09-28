@@ -93,7 +93,6 @@ import type { ChatMessage, ChatSession } from '@/types/videohub'
 import AgentStreamDisplay from '@/views/chat/components/AgentStreamDisplay.vue'
 import VideohubAgentPicker from '@/components/videohub/VideohubAgentPicker.vue'
 import { useSettingsStore } from '@/stores/settings'
-import { shouldShowVideoCitationTitle } from '@/utils/citationMarkdown'
 import { shouldAutoRoute } from '@/api/videohub/chatRequest'
 
 const router = useRouter()
@@ -194,12 +193,7 @@ function questionForMessage(index: number): string {
   return lastUserQuery.value
 }
 function shouldShowVideoTitle(index: number): boolean {
-  const message = activeSession.value?.messages[index]
-  if (!message || message.sender !== 'assistant') return false
-  // A video-scoped session already identifies the source in its header and
-  // request context. Do not repeat the title beside every timestamp.
-  if (activeSession.value?.scope === 'video') return false
-  return shouldShowVideoCitationTitle(questionForMessage(index), message.knowledge_references)
+  return false
 }
 function updateStreamingMessage(messageId: string, message: StreamingChatMessage) {
   if (!activeSession.value) return
@@ -340,6 +334,7 @@ onMounted(async () => {
   position: relative;
   isolation: isolate;
   display: flex;
+  box-sizing: border-box;
   min-height: 100%;
   height: 100%;
   overflow: hidden;
@@ -563,12 +558,15 @@ onMounted(async () => {
 .chat-tool {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   height: 30px;
   padding: 0 8px;
   border-radius: var(--td-radius-medium);
   color: var(--td-text-color-secondary);
   font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
 }
 
 .chat-tool:hover {
@@ -577,7 +575,15 @@ onMounted(async () => {
 }
 
 .chat-tool :deep(.t-icon) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
   font-size: 15px;
+  line-height: 1;
+  vertical-align: middle;
 }
 
 .chat-send {
@@ -602,7 +608,10 @@ onMounted(async () => {
 .conversation {
   display: grid;
   grid-template-rows: auto 1fr auto;
-  min-height: calc(100% - 4px);
+  box-sizing: border-box;
+  height: calc(100% - 4px);
+  min-height: 0;
+  overflow: hidden;
   padding-bottom: 8px;
 }
 
@@ -624,8 +633,11 @@ onMounted(async () => {
 }
 
 .conversation__messages {
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 24px 4px;
+  -webkit-overflow-scrolling: touch;
 }
 
 .conversation-composer {

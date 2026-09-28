@@ -117,10 +117,11 @@ func publicAttr(expression *regexp.Regexp, tag string) string {
 }
 
 var (
-	refTagRE       = regexp.MustCompile(`(?i)<ref\s+id\s*=\s*"([^"]+)"\s*/?>`)
-	refCandidateRE = regexp.MustCompile(`(?is)<ref(?:\s|$)[^>]*(?:>|$)`)
-	modelKBTagRE   = regexp.MustCompile(`(?is)<kb(?:\s|$)[^>]*(?:>|$)`)
-	modelWebTagRE  = regexp.MustCompile(`(?is)<web(?:\s|$)[^>]*(?:>|$)`)
+	refTagRE                 = regexp.MustCompile(`(?i)<ref\s+id\s*=\s*"([^"]+)"\s*/?>`)
+	refCandidateRE           = regexp.MustCompile(`(?is)<ref(?:\s|$)[^>]*(?:>|$)`)
+	modelKBTagRE             = regexp.MustCompile(`(?is)<kb(?:\s|$)[^>]*(?:>|$)`)
+	modelWebTagRE            = regexp.MustCompile(`(?is)<web(?:\s|$)[^>]*(?:>|$)`)
+	nonstandardCitationTagRE = regexp.MustCompile(`(?is)<复选(?:\s|$)[^>]*(?:>|$)`)
 )
 
 var (
@@ -163,6 +164,7 @@ func (r *sourceRegistry) ExpandText(text string) string {
 	// by the model, then create canonical tags solely from registered handles.
 	text = modelKBTagRE.ReplaceAllString(text, "")
 	text = modelWebTagRE.ReplaceAllString(text, "")
+	text = nonstandardCitationTagRE.ReplaceAllString(text, "")
 	if !r.citationsEnabled {
 		return refCandidateRE.ReplaceAllString(text, "")
 	}

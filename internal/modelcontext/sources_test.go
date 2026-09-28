@@ -66,6 +66,11 @@ func TestRegistrySuppressesSourceCitationsWhenDisabled(t *testing.T) {
 	))
 }
 
+func TestRegistryDropsNonstandardVideoCitationTag(t *testing.T) {
+	registry := newSourceRegistry()
+	require.Equal(t, "定位内容。", registry.ExpandText(`定位内容<复选 type="comparison" name="ref" id="c13"/>。`))
+}
+
 func TestRegistryDecodesAliasesInNestedToolArguments(t *testing.T) {
 	registry := NewRegistry(true)
 	registry.RegisterDocument("knowledge-uuid-1")

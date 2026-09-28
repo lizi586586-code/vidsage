@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	agenttools "github.com/Tencent/WeKnora/internal/agent/tools"
@@ -22,6 +24,21 @@ func finalAnswerImageRequirement(hasRetrievedImage bool) string {
 	return `
 5. Retrieved tool results contain Markdown images. Unless the user explicitly requested text-only output or every image is clearly unrelated, the final answer MUST include at least one relevant Markdown image copied verbatim from the tool results. Preserve its complete URL exactly. Use ASCII half-width parentheses exactly as ![alt](url) and never use full-width （ or ）. Place the image immediately after the paragraph it supports. When multiple images support different sections, distribute them across those sections instead of stopping after the first image.
 6. Before finishing, silently verify that the answer contains a Markdown image when requirement 5 applies.`
+}
+
+func finalAnswerComparisonRequirement(query string) string {
+	normalized := strings.TrimSpace(query)
+	if normalized == "" ||
+		(!strings.Contains(normalized, "比较") &&
+			!strings.Contains(normalized, "对比") &&
+			!strings.Contains(normalized, "分别") &&
+			!strings.Contains(normalized, "二者")) {
+		return ""
+	}
+	return `
+12. This is a comparison question. Use at least one "comparison" block for each explicitly requested video or concept, then include a summary/evidence block that states the key difference and the scope boundary.
+13. Do not claim that one video directly defines a concept unless the retrieved evidence supports that exact claim. If a requested video or claim is not evidenced, use coverage "partial" and say what remains unverified.
+14. Keep every factual comparison claim tied to one or more citation handles from the current tool results; never use a handle from another turn or invent a video identity.`
 }
 
 // streamFinalAnswerToEventBus streams the final answer generation through EventBus
@@ -73,6 +90,7 @@ func (e *AgentEngine) streamFinalAnswerToEventBus(
 		len(messages), toolResultCount)
 
 	imageRequirement := finalAnswerImageRequirement(hasRetrievedImage)
+	comparisonRequirement := finalAnswerComparisonRequirement(query)
 	answerContractRequirement := ""
 	bufferFinalAnswer := false
 	if e.config != nil && videoevidence.Supports(e.config.VideoEvidenceCitation) {
@@ -81,7 +99,8 @@ func (e *AgentEngine) streamFinalAnswerToEventBus(
 			answerContractRequirement = fmt.Sprintf(`
 8. Return exactly one JSON object that conforms to %s. Do not use Markdown fences, explanations, or trailing text.
 9. The object must contain: schema_version (exactly %q), mode (exactly %q for this agent), coverage (%q, %q, or %q), content_markdown (string), and blocks (array).
-10. Each block must contain only type, title, text_markdown, and evidence_refs. Block type must be exactly one of "summary", "topic", "comparison", "steps", or "evidence"; never use "video_evidence" or "answer". Use evidence_refs only for citation handles that appear in the block text as <ref id="cN"/>. Ordinary knowledge/Wiki cN handles may be cited for explanation, but they remain normal sources and never become video evidence; video locations require a validated transcript handle. Do not invent video IDs, titles, timestamps, evidence IDs, or links.`, videoevidence.AnswerContractVersion,
+10. Each block must contain only type, title, text_markdown, and evidence_refs. Block type must be exactly one of "summary", "topic", "comparison", "steps", or "evidence"; never use "video_evidence" or "answer". Use evidence_refs only for citation handles that appear in the block text as <ref id="cN"/>. Ordinary knowledge/Wiki cN handles may be cited for explanation, but they remain normal sources and never become video evidence; video locations require a validated transcript handle. Do not invent video IDs, titles, timestamps, evidence IDs, or links.
+11. Every video location must be written as a complete sentence around its citation. If the answer contains more than 3 validated video locations, use a Markdown table with exactly the headers "定位" and "核心主旨"; put one complete location sentence and its <ref id="cN"/> in each location row. Do not write video titles beside citations; the client renders only the validated time range.`, videoevidence.AnswerContractVersion,
 				videoevidence.AnswerContractVersion, videoevidence.AnswerModeReasoning,
 				videoevidence.AnswerCoverageComplete, videoevidence.AnswerCoveragePartial, videoevidence.AnswerCoverageNone)
 		}
@@ -103,8 +122,9 @@ Requirements:
 4. Respond in the same language as the user's question
 %s
 %s
+%s
 
-Now generate the final answer:`, query, imageRequirement, answerContractRequirement)
+Now generate the final answer:`, query, imageRequirement, answerContractRequirement, comparisonRequirement)
 
 	messages = append(messages, chat.Message{
 		Role:    "user",
@@ -177,6 +197,14 @@ Now generate the final answer:`, query, imageRequirement, answerContractRequirem
 			})
 			return err
 		}
+		if err := videoevidence.ValidateComparisonAnswer(query, contract, projection); err != nil {
+			logger.Errorf(ctx, "[Agent][FinalAnswer] Comparison answer validation failed: %v", err)
+			common.PipelineError(ctx, "Agent", "answer_contract_invalid", map[string]interface{}{
+				"session_id": sessionID,
+				"error_code": err.Error(),
+			})
+			return err
+		}
 		fullAnswer = e.modelContext.DecodeOutputText(projection.RenderedMarkdown)
 		e.eventBus.Emit(ctx, event.Event{
 			ID:        answerID,
@@ -228,9 +256,17 @@ func (e *AgentEngine) handleMaxIterations(
 		common.PipelineError(ctx, "Agent", "final_answer_failed", map[string]interface{}{
 			"error": err.Error(),
 		})
-		state.FinalAnswer = "Sorry, I was unable to generate a complete answer."
 		state.CompletionStatus = "failed"
 		state.CompletionFailureReason = "final_answer_generation_failed"
+		var contractErr *videoevidence.AnswerContractError
+		if errors.As(err, &contractErr) {
+			state.CompletionFailureReason = answerContractFailureReason(err)
+		}
+		if state.CompletionFailureReason == "missing_video_coverage" {
+			state.FinalAnswer = answerContractFailureMessage(state.CompletionFailureReason)
+		} else {
+			state.FinalAnswer = "Sorry, I was unable to generate a complete answer."
+		}
 	} else {
 		state.CompletionStatus = "succeeded"
 		state.CompletionFailureReason = ""

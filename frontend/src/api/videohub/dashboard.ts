@@ -45,6 +45,8 @@ export interface ChatSourceAuditInput {
     | 'reasoning_timeout'
     | 'answer_contract_truncated'
     | 'answer_contract_invalid'
+    | 'missing_video_coverage'
+    | 'missing_video_table'
     | 'empty_response'
     | 'final_answer_generation_failed'
     | 'llm_call_failed_after_tool_results'

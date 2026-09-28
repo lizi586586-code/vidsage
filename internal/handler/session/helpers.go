@@ -288,12 +288,16 @@ func (h *Handler) setupStreamHandler(
 	tenantID uint64,
 	receivedAt time.Time,
 	assistantMessage *types.Message,
+	route routeMetadata,
 	eventBus *event.EventBus,
 ) *AgentStreamHandler {
 	streamHandler := NewAgentStreamHandler(
 		ctx, sessionID, assistantMessageID, requestID, tenantID, receivedAt,
 		assistantMessage, h.streamManager, eventBus, h.artifactCollector,
 	)
+	// Route metadata is computed before the SSE stream starts and is attached
+	// before subscribing, so the terminal event cannot lose it.
+	streamHandler.SetRouteMetadata(route)
 	streamHandler.Subscribe()
 	return streamHandler
 }

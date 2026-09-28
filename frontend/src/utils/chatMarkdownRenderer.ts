@@ -9,6 +9,7 @@ import {
   preserveCitationTags,
   restoreCitationHtmlPlaceholders,
   restoreCitationTags,
+  stripNonstandardCitationTags,
   stripIncompleteCitationTag,
   type CitationKnowledgeRef,
 } from './citationMarkdown.ts'
@@ -464,7 +465,7 @@ export function renderChatMarkdown(rawMarkdown: unknown, options: RenderChatMark
     streamingSafeText,
     Boolean(options.streaming),
   )
-  const citationSafeText = stripIncompleteCitationTag(imageContextSafeText)
+  const citationSafeText = stripNonstandardCitationTags(stripIncompleteCitationTag(imageContextSafeText))
   const { text: tagSafe, tags } = preserveCitationTags(citationSafeText)
   const normalizedImageMarkdown = normalizeFullwidthMarkdownImageParentheses(tagSafe)
   const imageSafe = replaceIncompleteImageWithPlaceholder(normalizedImageMarkdown)

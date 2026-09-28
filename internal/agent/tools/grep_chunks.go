@@ -701,6 +701,8 @@ func buildGrepChunkResults(results []chunkWithTitle, compiled []*regexp.Regexp) 
 			Content:        r.Content,
 			KnowledgeID:    r.KnowledgeID,
 			KnowledgeTitle: r.KnowledgeTitle,
+			ChunkType:      string(r.ChunkType),
+			ChunkMetadata:  r.Metadata,
 			Metadata:       make(map[string]string),
 		}
 		videoevidence.EnrichSearchResult(evidenceResult)

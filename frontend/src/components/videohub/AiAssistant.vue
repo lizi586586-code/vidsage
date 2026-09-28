@@ -4,8 +4,7 @@
       <section v-if="expanded" class="assistant-drawer">
         <header>
           <div>
-            <strong>AI Assistant</strong>
-            <span>{{ globalMode ? '全局视频问答' : `围绕《${currentVideo.title}》提问` }}</span>
+            <span>{{ globalMode ? firstQuestion : `围绕《${currentVideo.title}》提问` }}</span>
           </div>
           <t-button variant="text" shape="square" aria-label="收起" @click="expanded = false">
             <t-icon name="chevron-down" />
@@ -75,7 +74,6 @@ import VideohubAgentPicker from '@/components/videohub/VideohubAgentPicker.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { sanitizeMarkdownHTML } from '@/utils/security'
 import { configureMarkedForChatMarkdown, renderChatMarkdown } from '@/utils/chatMarkdownRenderer'
-import { shouldShowVideoCitationTitle } from '@/utils/citationMarkdown'
 import { shouldAutoRoute } from '@/api/videohub/chatRequest'
 
 type TimestampPart = { text: string; seconds?: number; videoId?: string }
@@ -96,6 +94,7 @@ const streamingAssistantId = ref('')
 const streamingAssistantVisible = computed(() => messages.value.some(message =>
   message.id === streamingAssistantId.value && Boolean(message.text || message.thinkingText || message.activityText),
 ))
+const firstQuestion = computed(() => messages.value.find(message => message.sender === 'user')?.text || '全局视频问答')
 
 const answerRenderer = new marked.Renderer()
 configureMarkedForChatMarkdown()
@@ -150,8 +149,7 @@ function questionForMessage(index: number): string {
 }
 
 function shouldShowVideoTitle(message: StreamingChatMessage, index: number): boolean {
-  if (message.sender !== 'assistant' || !props.globalMode) return false
-  return shouldShowVideoCitationTitle(questionForMessage(index), message.knowledge_references)
+  return false
 }
 
 function renderAssistantAnswer(text: string, references: ChatKnowledgeReference[] = [], question = '') {
@@ -161,7 +159,7 @@ function renderAssistantAnswer(text: string, references: ChatKnowledgeReference[
     sanitizeHtml: sanitizeMarkdownHTML,
     streaming: false,
     knowledgeReferences: references,
-    showVideoTitle: props.globalMode && shouldShowVideoCitationTitle(question, references),
+    showVideoTitle: false,
   })
   return html.replace(/\[(\d{2}:\d{2}(?:[–-]\d{2}:\d{2})?)\]/g, '<button type="button" class="timestamp">[$1]</button>')
 }
@@ -280,16 +278,17 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
 }
 
 .assistant-frame {
+  display: flex;
+  flex-direction: column;
   width: min(608px, calc(100% - 32px));
+  max-height: min(720px, calc(100vh - 32px));
   margin: 0 auto 16px;
   box-sizing: border-box;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, .84);
+  border: 1px solid var(--td-component-stroke);
   border-radius: var(--td-radius-extraLarge);
-  background: rgba(255, 255, 255, .62);
+  background: var(--td-bg-color-container);
   box-shadow: 0 12px 32px rgba(27, 37, 31, .08);
-  backdrop-filter: blur(24px) saturate(112%);
-  -webkit-backdrop-filter: blur(24px) saturate(112%);
   pointer-events: auto;
 }
 
@@ -299,10 +298,13 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
 }
 
 .assistant-drawer {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   width: 100%;
+  min-height: 0;
   box-sizing: border-box;
   overflow: hidden;
-  max-height: 600px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -310,10 +312,11 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
 }
 
 .assistant-drawer header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 4px 8px;
   border-bottom: 1px solid rgba(0, 0, 0, .08);
 }
 
@@ -322,26 +325,26 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   gap: 2px;
 }
 
-.assistant-drawer header strong {
-  color: var(--td-text-color-primary);
-  font: var(--td-font-title-medium);
-}
-
 .assistant-drawer header span {
   color: var(--td-text-color-secondary);
   font: var(--td-font-body-small);
+  line-height: 20px;
 }
 
 .assistant-messages {
+  flex: 1 1 auto;
   width: 100%;
+  min-height: 0;
   box-sizing: border-box;
   overflow-y: auto;
-  max-height: 500px;
+  max-height: none;
+  overscroll-behavior: contain;
   padding: 20px 16px 14px;
   color: var(--td-text-color-primary);
   font: var(--td-font-body-medium);
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--td-text-color-placeholder) 38%, transparent) transparent;
+  -webkit-overflow-scrolling: touch;
 }
 
 .assistant-messages::-webkit-scrollbar {
@@ -391,7 +394,8 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   margin: 0;
   padding: 11px 14px;
   border-radius: var(--td-radius-large);
-  background: rgba(255, 255, 255, .54);
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-stroke);
   color: var(--td-text-color-primary);
   font: var(--td-font-body-medium);
   line-height: 1.7;
@@ -457,6 +461,7 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
 }
 
 .assistant-suggestions {
+  flex: 0 0 auto;
   display: flex;
   gap: 6px;
   overflow-x: auto;
@@ -464,25 +469,24 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
 }
 
 .assistant-suggestions button {
-  padding: 6px 10px;
-  border: 1px solid rgba(255, 255, 255, .84);
+  padding: 2px 10px;
+  border: 1px solid var(--td-component-stroke);
   border-radius: var(--td-radius-round);
-  background: rgba(255, 255, 255, .48);
+  background: var(--td-bg-color-container);
   color: var(--td-text-color-secondary);
   cursor: pointer;
   font: var(--td-font-body-small);
   white-space: nowrap;
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
 }
 
 .assistant-suggestions button:hover {
   border-color: color-mix(in srgb, var(--td-brand-color) 30%, transparent);
-  background: rgba(255, 255, 255, .76);
+  background: var(--td-bg-color-container-hover);
   color: var(--td-brand-color);
 }
 
 .assistant-composer {
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
@@ -532,12 +536,15 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
 .chat-tool {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   height: 30px;
   padding: 0 8px;
   border-radius: var(--td-radius-medium);
   color: var(--td-text-color-secondary);
   font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
 }
 
 .chat-tool:hover {
@@ -546,7 +553,15 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
 }
 
 .chat-tool :deep(.t-icon) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
   font-size: 15px;
+  line-height: 1;
+  vertical-align: middle;
 }
 
 .chat-send {

@@ -40,6 +40,25 @@ test('video assistant keeps the created session before streaming finishes', () =
   assert.match(componentSource, /onSessionCreated: materializeActiveSession/)
 })
 
-test('video assistant requests automatic routing when no agent is selected', () => {
-  assert.match(componentSource, /agentEnabled:\s*settingsStore\.isAgentEnabled,\s*autoRoute:\s*true/)
+test('video assistant delegates automatic routing to the shared routing rule', () => {
+  assert.match(componentSource, /agentEnabled:\s*settingsStore\.isAgentEnabled,\s*autoRoute:\s*shouldAutoRoute\(settingsStore\.selectedAgentId,\s*settingsStore\.settings\.selectedAgentExplicit\)/)
+})
+
+test('video assistant keeps long conversations scrollable inside the viewport', () => {
+  assert.match(componentSource, /\.assistant-frame\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*max-height:\s*min\(720px,\s*calc\(100vh - 32px\)\)/s)
+  assert.match(componentSource, /\.assistant-drawer\s*\{[^}]*display:\s*flex[^}]*flex:\s*1 1 auto[^}]*min-height:\s*0/s)
+  assert.match(componentSource, /\.assistant-messages\s*\{[^}]*flex:\s*1 1 auto[^}]*min-height:\s*0[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s)
+})
+
+test('video assistant uses solid white surfaces instead of frosted backgrounds', () => {
+  assert.match(componentSource, /\.assistant-frame\s*\{[^}]*background:\s*var\(--td-bg-color-container\)/s)
+  assert.doesNotMatch(componentSource, /\.assistant-frame\s*\{[^}]*backdrop-filter:/s)
+  assert.match(componentSource, /\.assistant-suggestions button\s*\{[^}]*background:\s*var\(--td-bg-color-container\)/s)
+})
+
+test('video assistant expanded header uses the first question as global context', () => {
+  assert.doesNotMatch(componentSource, /<strong>AI Assistant<\/strong>/)
+  assert.match(componentSource, /const firstQuestion = computed\(\(\) => messages\.value\.find\(message => message\.sender === 'user'\)\?\.text \|\| '全局视频问答'\)/)
+  assert.match(componentSource, /\{\{ globalMode \? firstQuestion : `围绕《\$\{currentVideo\.title\}》提问` \}\}/)
+  assert.match(componentSource, /\.assistant-drawer header \{[^}]*padding:\s*4px 8px/s)
 })

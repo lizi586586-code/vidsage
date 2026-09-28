@@ -141,7 +141,7 @@ func (e *AgentEngine) buildSystemPrompt(ctx context.Context) string {
 		if e.config.AnswerContractEnabled {
 			videoPrompt += fmt.Sprintf(`
 
-Final response contract: output exactly one JSON object using %s with fields schema_version, mode, coverage, content_markdown, and blocks. Set mode to exactly "reasoning" for this agent. Each block type must be exactly one of "summary", "topic", "comparison", "steps", or "evidence"; never use "video_evidence" or "answer" as a block type. Do not output Markdown fences or trailing text. Each block may contain only type, title, text_markdown, and evidence_refs. Citation handles in content_markdown and text_markdown must use the exact form <ref id="cN"/> and must be listed in the matching block's evidence_refs. Ordinary knowledge/Wiki cN handles may be cited for explanation, but they remain normal sources and never become video evidence; video locations require a validated transcript handle.`, videoevidence.AnswerContractVersion)
+Final response contract: output exactly one JSON object using %s with fields schema_version, mode, coverage, content_markdown, and blocks. Set mode to exactly "reasoning" for this agent. Each block type must be exactly one of "summary", "topic", "comparison", "steps", or "evidence"; never use "video_evidence" or "answer" as a block type. Do not output Markdown fences or trailing text. Each block may contain only type, title, text_markdown, and evidence_refs. Citation handles in content_markdown and text_markdown must use the exact form <ref id="cN"/> and must be listed in the matching block's evidence_refs. Ordinary knowledge/Wiki cN handles may be cited for explanation, but they remain normal sources and never become video evidence; video locations require a validated transcript handle. Every video location must be a complete sentence. If there are more than 3 validated video locations, use a Markdown table with exactly the headers "定位" and "核心主旨". Do not write video titles beside citations; the client renders only the validated time range.`, videoevidence.AnswerContractVersion)
 		}
 	}
 	return strings.TrimRight(prompt, " \t\r\n") + e.memoryPrompt + e.modelContext.ProtocolPrompt() + videoPrompt
@@ -479,7 +479,9 @@ loop:
 type iterOutcome int
 
 const (
-	maxAnswerContractRetries = 1
+	// Keep contract correction bounded while allowing a second attempt for
+	// models that repeat a quoting mistake after the first correction.
+	maxAnswerContractRetries = 2
 
 	// iterOutcomeNext advances state.CurrentRound and loops again.
 	iterOutcomeNext iterOutcome = iota
@@ -492,8 +494,15 @@ const (
 
 func answerContractFailureReason(err error) string {
 	var contractErr *videoevidence.AnswerContractError
-	if errors.As(err, &contractErr) && contractErr.Code == videoevidence.AnswerErrorTruncatedOutput {
-		return "answer_contract_truncated"
+	if errors.As(err, &contractErr) {
+		switch contractErr.Code {
+		case videoevidence.AnswerErrorTruncatedOutput:
+			return "answer_contract_truncated"
+		case videoevidence.AnswerErrorMissingVideoCoverage:
+			return "missing_video_coverage"
+		case videoevidence.AnswerErrorMissingVideoTable:
+			return "missing_video_table"
+		}
 	}
 	return "answer_contract_invalid"
 }
@@ -502,16 +511,28 @@ func answerContractFailureMessage(reason string) string {
 	if reason == "answer_contract_truncated" {
 		return "回答生成不完整，请重试。"
 	}
+	if reason == "missing_video_coverage" {
+		return "已找到部分视频证据，但尚未覆盖问题涉及的全部视频，请重试。"
+	}
+	if reason == "missing_video_table" {
+		return "已找到多个视频定位，但回答未按要求输出定位表格，请重试。"
+	}
 	return "回答格式校验失败，请重试。"
 }
 
 func answerContractRetryPrompt(err error) string {
 	reason := answerContractFailureReason(err)
 	if reason == "answer_contract_truncated" {
-		return fmt.Sprintf("上一轮 %s 输出被截断。请立即重试，只输出一个未加围栏的合法 JSON 对象，不要输出思考过程或解释。使用 %s 协议；content_markdown 不超过 400 个字符，blocks 最多 3 个，每个 text_markdown 不超过 500 个字符。每个 evidence_refs 必须逐字对应同一 block 文本中的 <ref id=\"cN\"/>，只能使用工具返回的句柄，不要输出 JSON 之外的内容。",
+		return fmt.Sprintf("上一轮 %s 输出被截断。请立即重试，只输出一个未加围栏的合法 JSON 对象，不要输出思考过程或解释。使用 %s 协议；content_markdown 不超过 400 个字符，blocks 最多 3 个，每个 text_markdown 不超过 500 个字符。字符串内部不要使用裸双引号，引用视频标题或术语时使用《》或「」；如果必须使用双引号，必须写成 \\\"。比较多个明确视频时，至少输出两个 comparison blocks，并覆盖两个视频；每个 evidence_refs 必须逐字对应同一 block 文本中的 <ref id=\"cN\"/>，只能使用工具返回的句柄，不要输出 JSON 之外的内容。",
 			videoevidence.AnswerContractVersion, videoevidence.AnswerContractVersion)
 	}
-	return fmt.Sprintf("上一轮响应违反了 %s 协议（%v）。请只输出一个未加围栏的合法 JSON 对象：schema_version 必须是 %q，mode 必须是 %q，coverage 必须是 complete/partial/none 之一，block 类型只能是 summary/topic/comparison/steps/evidence。每个 evidence_refs 必须逐字对应同一 block 文本中的 <ref id=\"cN\"/>；只能使用工具返回的句柄。不要输出解释、时间戳、视频标题或 JSON 之外的内容。",
+	if reason == "missing_video_coverage" {
+		return fmt.Sprintf("上一轮回答只覆盖了部分视频证据。请先继续使用 WeKnora 原生检索补齐问题涉及的视频，再只输出一个合法 %s JSON；不得按标题猜测视频或证据，不得把未校验内容写入回答。若仍无法补齐，必须将 coverage 设为 partial，并明确缺少视频覆盖。", videoevidence.AnswerContractVersion)
+	}
+	if reason == "missing_video_table" {
+		return fmt.Sprintf("上一轮回答包含超过 3 个有效视频定位，但没有按格式输出表格。请只输出一个合法 %s JSON；在 content_markdown 或某个 block 的 text_markdown 中使用 Markdown 表格，表头必须是 `定位` 和 `核心主旨`，每条定位写成完整句子并在同一行保留对应 <ref id=\"cN\"/>，只使用工具返回的句柄。视频引用只保留系统渲染的时间范围，不要自行写标题、时间或 ID。", videoevidence.AnswerContractVersion)
+	}
+	return fmt.Sprintf("上一轮响应违反了 %s 协议（%v）。请只输出一个未加围栏的合法 JSON 对象，且尽量简短：content_markdown 不超过 400 个字符，blocks 最多 3 个，每个 text_markdown 不超过 500 个字符。schema_version 必须是 %q，mode 必须是 %q，coverage 必须是 complete/partial/none 之一，block 类型只能是 summary/topic/comparison/steps/evidence。字符串内部不要使用裸双引号，引用视频标题或术语时使用《》或「」；如果必须使用双引号，必须写成 \\\"。比较多个明确视频时，至少输出两个 comparison blocks，并覆盖两个视频；每个 evidence_refs 必须逐字对应同一 block 文本中的 <ref id=\"cN\"/>，只能使用工具返回的句柄。不要输出思考过程、解释或 JSON 之外的内容。",
 		videoevidence.AnswerContractVersion, err, videoevidence.AnswerContractVersion, videoevidence.AnswerModeReasoning)
 }
 
@@ -621,9 +642,12 @@ func (e *AgentEngine) runReActIteration(
 			response.Usage.CompletionTokens, response.Usage.TotalTokens)
 	}
 
-	// Detect stuck loops: if the LLM keeps returning the same content
-	// without tool calls (e.g., an unhandled finish reason), break early.
-	if len(response.ToolCalls) == 0 && response.Content != "" {
+	// Detect stuck loops for ordinary text responses. A normally finished
+	// contract response must reach strict validation first so repeated invalid
+	// JSON cannot be marked successful; contract correction has its own bound.
+	contractMode := e.config != nil && e.config.AnswerContractEnabled
+	contractResponse := contractMode && isNaturalStopFinishReason(response.FinishReason)
+	if len(response.ToolCalls) == 0 && response.Content != "" && !contractResponse {
 		if response.Content == *lastResponseContent {
 			*consecutiveSameContent++
 		} else {
@@ -685,9 +709,14 @@ func (e *AgentEngine) runReActIteration(
 				logger.Errorf(ctx, "[Agent][Round-%d] Answer evidence projection failed: %v", round, err)
 				verdict.contractErr = err
 			} else {
-				verdict.finalAnswer = e.modelContext.DecodeOutputText(projection.RenderedMarkdown)
-				verdict.emptyContent = strings.TrimSpace(verdict.finalAnswer) == ""
-				e.emitValidatedFinalAnswer(ctx, sessionID, verdict.finalAnswer)
+				if err := videoevidence.ValidateComparisonAnswer(query, verdict.contract, projection); err != nil {
+					logger.Errorf(ctx, "[Agent][Round-%d] Comparison answer validation failed: %v", round, err)
+					verdict.contractErr = err
+				} else {
+					verdict.finalAnswer = e.modelContext.DecodeOutputText(projection.RenderedMarkdown)
+					verdict.emptyContent = strings.TrimSpace(verdict.finalAnswer) == ""
+					e.emitValidatedFinalAnswer(ctx, sessionID, verdict.finalAnswer)
+				}
 			}
 		}
 		if verdict.contractErr != nil {

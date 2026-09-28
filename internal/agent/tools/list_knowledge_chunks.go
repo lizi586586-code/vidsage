@@ -10,6 +10,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
 
 // listKnowledgeChunksMaxLimit is the hard per-page ceiling enforced by the
@@ -220,12 +221,18 @@ func (t *ListKnowledgeChunksTool) Execute(ctx context.Context, args json.RawMess
 		}
 	}
 
-	knowledgeTitle := t.lookupKnowledgeTitle(ctx, knowledgeID)
+	knowledgeTitle := strings.TrimSpace(knowledge.Title)
+	knowledgeMetadata := knowledge.GetMetadata()
 
 	output := t.buildOutput(knowledgeID, knowledgeTitle, totalChunks, fetched, chunks)
 
 	formattedChunks := make([]map[string]interface{}, 0, len(chunks))
 	for idx, c := range chunks {
+		metadataRef := videoevidence.EnrichSearchResult(&types.SearchResult{
+			ID: c.ID, Content: c.Content, ChunkType: c.ChunkType,
+			KnowledgeID: c.KnowledgeID, KnowledgeTitle: knowledgeTitle,
+			Metadata: cloneStringMetadata(knowledgeMetadata), ChunkMetadata: c.Metadata,
+		})
 		chunkData := map[string]interface{}{
 			"seq":             idx + 1,
 			"chunk_id":        c.ID,
@@ -237,6 +244,7 @@ func (t *ListKnowledgeChunksTool) Execute(ctx context.Context, args json.RawMess
 			"start_at":        c.StartAt,
 			"end_at":          c.EndAt,
 			"parent_chunk_id": c.ParentChunkID,
+			"metadata":        metadataRef.Metadata,
 		}
 
 		appendFAQChunkData(chunkData, c)
@@ -310,7 +318,7 @@ func (t *ListKnowledgeChunksTool) executeByChunkID(ctx context.Context, chunkID 
 		}
 	}
 
-	knowledgeTitle := t.lookupKnowledgeTitle(ctx, chunk.KnowledgeID)
+	knowledgeTitle, knowledgeMetadata := t.lookupKnowledgeInfo(ctx, chunk.KnowledgeID)
 	output := t.buildOutput(chunk.KnowledgeID, knowledgeTitle, 1, 1, chunks)
 
 	formattedChunks := []map[string]interface{}{
@@ -324,6 +332,12 @@ func (t *ListKnowledgeChunksTool) executeByChunkID(ctx context.Context, chunkID 
 			"knowledge_base": chunk.KnowledgeBaseID,
 		},
 	}
+	metadataRef := videoevidence.EnrichSearchResult(&types.SearchResult{
+		ID: chunk.ID, Content: chunk.Content, ChunkType: chunk.ChunkType,
+		KnowledgeID: chunk.KnowledgeID, KnowledgeTitle: knowledgeTitle,
+		Metadata: cloneStringMetadata(knowledgeMetadata), ChunkMetadata: chunk.Metadata,
+	})
+	formattedChunks[0]["metadata"] = metadataRef.Metadata
 	appendFAQChunkData(formattedChunks[0], chunk)
 	normalizeFAQChunkDataMap(formattedChunks[0], chunk)
 
@@ -350,17 +364,29 @@ func (t *ListKnowledgeChunksTool) executeByChunkID(ctx context.Context, chunkID 
 	}, nil
 }
 
-// lookupKnowledgeTitle looks up the title of a knowledge document
+// lookupKnowledgeInfo looks up the title and backend-owned metadata of a
+// knowledge document.
 // Uses GetKnowledgeByIDOnly to support cross-tenant shared KB
-func (t *ListKnowledgeChunksTool) lookupKnowledgeTitle(ctx context.Context, knowledgeID string) string {
+func (t *ListKnowledgeChunksTool) lookupKnowledgeInfo(ctx context.Context, knowledgeID string) (string, map[string]string) {
 	if t.knowledgeService == nil {
-		return ""
+		return "", nil
 	}
 	knowledge, err := t.knowledgeService.GetKnowledgeByIDOnly(ctx, knowledgeID)
 	if err != nil || knowledge == nil {
-		return ""
+		return "", nil
 	}
-	return strings.TrimSpace(knowledge.Title)
+	return strings.TrimSpace(knowledge.Title), knowledge.GetMetadata()
+}
+
+func cloneStringMetadata(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 // buildOutput builds the output as XML for the list knowledge chunks tool

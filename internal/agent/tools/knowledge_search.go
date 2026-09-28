@@ -1347,6 +1347,7 @@ func (t *KnowledgeSearchTool) formatOutput(
 			"query_type":          result.QueryType,
 			"knowledge_base_type": result.KnowledgeBaseType,
 			"metadata":            result.Metadata,
+			"chunk_metadata":      result.ChunkMetadata,
 		})
 
 		last := formattedResults[len(formattedResults)-1]

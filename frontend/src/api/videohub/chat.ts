@@ -26,6 +26,8 @@ interface ScopeResponse extends ChatRequestScope {
   video_id?: string
   video_title?: string
   video_cover_url?: string
+  execution_scope?: 'current_video' | 'global_videos'
+  scope_resolution?: string
   session_meta: Record<string, string>
 }
 
@@ -539,8 +541,7 @@ async function loadSessionMessages(sessionID: string, tenantID?: string | number
 async function lookupEvidence(knowledgeIDs: string[]) {
   const ids = [...new Set(knowledgeIDs.filter(Boolean))]
   if (!ids.length) return new Map<string, EvidenceLookupItem>()
-  const query = encodeURIComponent(ids.join(','))
-  const res = await get<ApiEnvelope<EvidenceLookupItem[]>>(`/api/custom/chat/evidence?knowledge_ids=${query}`)
+  const res = await post<ApiEnvelope<EvidenceLookupItem[]>>('/api/custom/chat/evidence', { knowledge_ids: ids })
   const evidenceByKey = new Map<string, EvidenceLookupItem>()
   for (const item of unwrapData(res) || []) {
     for (const key of [item.knowledge_id, item.evidence_sentence_id]) {

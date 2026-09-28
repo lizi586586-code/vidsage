@@ -102,6 +102,36 @@ func CandidateFromSearchResult(result *types.SearchResult) (Candidate, bool) {
 	return candidate, true
 }
 
+func transcriptMetadataFromResult(result *types.SearchResult) (transcriptMetadata, bool) {
+	if result == nil {
+		return transcriptMetadata{}, false
+	}
+	// New transcript rows may carry the locator in ChunkMetadata. Keep this
+	// path ahead of text parsing so structured backend metadata is authoritative.
+	if len(result.ChunkMetadata) > 0 {
+		var parsed transcriptMetadata
+		if err := json.Unmarshal(result.ChunkMetadata, &parsed); err == nil && validTranscriptMetadata(parsed) {
+			return parsed, true
+		}
+	}
+	// Older VidSage transcript knowledge records stored the complete locator
+	// document in the backend-owned knowledge metadata `content` field while
+	// the indexed chunk body could be split mid-JSON.
+	if result.Metadata != nil {
+		if raw := strings.TrimSpace(result.Metadata["content"]); raw != "" {
+			if parsed, ok := parseTranscriptMetadata(raw); ok {
+				return parsed, true
+			}
+		}
+	}
+	return parseTranscriptMetadata(result.Content)
+}
+
+func validTranscriptMetadata(parsed transcriptMetadata) bool {
+	return parsed.EvidenceSentenceID != "" && parsed.VideoID != "" &&
+		parsed.TranscriptGeneration != "" && parsed.StartMs >= 0 && parsed.EndMs > parsed.StartMs
+}
+
 // CandidateFromMap is used for structured tool result rows. The row must
 // explicitly carry metadata; match_snippet/content are never inspected.
 func CandidateFromMap(row map[string]interface{}) (Candidate, bool) {
@@ -115,6 +145,11 @@ func CandidateFromMap(row map[string]interface{}) (Candidate, bool) {
 		KnowledgeTitle: stringValue(row, "knowledge_title", "title"),
 		ChunkType:      stringValue(row, "chunk_type", "type"),
 		Metadata:       metadata,
+	}
+	if raw := row["chunk_metadata"]; raw != nil {
+		if encoded, err := json.Marshal(raw); err == nil {
+			result.ChunkMetadata = types.JSON(encoded)
+		}
 	}
 	if result.ID == "" {
 		result.ID = stringValue(row, "faq_id")
@@ -136,7 +171,7 @@ func EnrichSearchResult(result *types.SearchResult) *types.SearchResult {
 		result.Metadata = make(map[string]string)
 	}
 	if _, ok := CandidateFromSearchResult(result); !ok {
-		if parsed, ok := parseTranscriptMetadata(result.Content); ok {
+		if parsed, ok := transcriptMetadataFromResult(result); ok {
 			result.Metadata[metadataEvidenceID] = parsed.EvidenceSentenceID
 			result.Metadata[metadataVideoID] = parsed.VideoID
 			result.Metadata[metadataVideoTitle] = firstNonEmpty(parsed.VideoTitle, result.KnowledgeTitle)
@@ -428,8 +463,7 @@ func parseTranscriptMetadata(content string) (transcriptMetadata, bool) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(content[fenceStart:fenceStart+fenceEnd])), &parsed); err != nil {
 		return transcriptMetadata{}, false
 	}
-	if parsed.EvidenceSentenceID == "" || parsed.VideoID == "" ||
-		parsed.TranscriptGeneration == "" || parsed.StartMs < 0 || parsed.EndMs <= parsed.StartMs {
+	if !validTranscriptMetadata(parsed) {
 		return transcriptMetadata{}, false
 	}
 	return parsed, true

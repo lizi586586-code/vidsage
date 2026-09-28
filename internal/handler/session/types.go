@@ -43,6 +43,7 @@ type ImageAttachment struct {
 // CreateKnowledgeQARequest defines the request structure for knowledge QA
 type CreateKnowledgeQARequest struct {
 	Query                 string                       `json:"query"              binding:"required"` // Query text for knowledge base search
+	ExecutionScope        string                       `json:"execution_scope"`                       // Server-issued access boundary hint; never a semantic video selection
 	KnowledgeBaseIDs      []string                     `json:"knowledge_base_ids"`                    // Selected knowledge base ID for this request
 	KnowledgeIds          []string                     `json:"knowledge_ids"`                         // Selected knowledge ID for this request
 	AgentEnabled          bool                         `json:"agent_enabled"`                         // Whether agent mode is enabled for this request

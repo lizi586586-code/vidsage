@@ -9,6 +9,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/event"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/Tencent/WeKnora/internal/videoevidence"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -164,4 +165,115 @@ func TestHandleCompleteDoesNotPersistEmptyFailedAnswer(t *testing.T) {
 	require.True(t, message.IsCompleted)
 	require.Equal(t, "回答生成不完整，请重试。", message.Content)
 	require.NotEmpty(t, stream.events)
+}
+
+func TestHandleCompleteDoesNotPersistEmptyMissingVideoCoverageAnswer(t *testing.T) {
+	message := &types.Message{ID: "assistant-1", SessionID: "session-1"}
+	stream := &recordingStreamManager{}
+	handler := NewAgentStreamHandler(
+		context.Background(), "session-1", "assistant-1", "request-1", 1, time.Now(),
+		message, stream, event.NewEventBus(), nil,
+	)
+
+	err := handler.handleComplete(context.Background(), event.Event{
+		Type: event.EventAgentComplete,
+		Data: event.AgentCompleteData{
+			MessageID:     "assistant-1",
+			Outcome:       "failed",
+			FailureReason: "missing_video_coverage",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "已找到部分视频证据，但尚未覆盖问题涉及的全部视频，请重试。", message.Content)
+	require.NotEmpty(t, stream.events)
+}
+
+func TestHandleCompleteDoesNotPersistEmptyMissingVideoCoverageAnswerWithoutOutcome(t *testing.T) {
+	message := &types.Message{ID: "assistant-1", SessionID: "session-1"}
+	stream := &recordingStreamManager{}
+	handler := NewAgentStreamHandler(
+		context.Background(), "session-1", "assistant-1", "request-1", 1, time.Now(),
+		message, stream, event.NewEventBus(), nil,
+	)
+
+	err := handler.handleComplete(context.Background(), event.Event{
+		Type: event.EventAgentComplete,
+		Data: event.AgentCompleteData{
+			MessageID:     "assistant-1",
+			FailureReason: "missing_video_coverage",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "已找到部分视频证据，但尚未覆盖问题涉及的全部视频，请重试。", message.Content)
+	require.NotEmpty(t, stream.events)
+}
+
+func TestHandleCompleteMarksFailedAnswerCoverageAsPartial(t *testing.T) {
+	message := &types.Message{ID: "assistant-1", SessionID: "session-1"}
+	stream := &recordingStreamManager{}
+	handler := NewAgentStreamHandler(
+		context.Background(), "session-1", "assistant-1", "request-1", 1, time.Now(),
+		message, stream, event.NewEventBus(), nil,
+	)
+	handler.knowledgeRefs = []*types.SearchResult{{
+		ID:          "chunk-1",
+		KnowledgeID: "knowledge-1",
+		Metadata: map[string]string{
+			"evidence_sentence_id":  "evs:v1:one",
+			"source_type":           videoevidence.SourceTypeTranscript,
+			"video_id":              "video-1",
+			"video_title":           "视频一",
+			"start_ms":              "1000",
+			"end_ms":                "2000",
+			"transcript_generation": "generation-1",
+		},
+	}}
+
+	require.NoError(t, handler.handleComplete(context.Background(), event.Event{
+		Type: event.EventAgentComplete,
+		Data: event.AgentCompleteData{
+			MessageID:     "assistant-1",
+			Outcome:       "failed",
+			FailureReason: "answer_contract_invalid",
+		},
+	}))
+
+	require.NotEmpty(t, stream.events)
+	data := stream.events[len(stream.events)-1].Data
+	require.Equal(t, "partial", data["coverage"])
+}
+
+func TestHandleCompleteExposesBackendRouteStatus(t *testing.T) {
+	message := &types.Message{ID: "assistant-1", SessionID: "session-1", AgentID: types.BuiltinSmartReasoningID}
+	stream := &recordingStreamManager{}
+	handler := NewAgentStreamHandler(
+		context.Background(), "session-1", "assistant-1", "request-1", 1, time.Now(),
+		message, stream, event.NewEventBus(), nil,
+	)
+	handler.SetRouteMetadata(routeMetadata{
+		AutoRoute:            true,
+		IntentStatus:         "not_exposed",
+		ScopeHint:            "global_videos",
+		ExecutionScope:       "global_videos",
+		EffectiveScope:       "global_videos",
+		EffectiveScopeStatus: "computed",
+		SchemaValid:          false,
+		ErrorCode:            "unknown_field",
+	})
+
+	require.NoError(t, handler.handleComplete(context.Background(), event.Event{
+		Type: event.EventAgentComplete,
+		Data: event.AgentCompleteData{MessageID: "assistant-1", Outcome: "succeeded"},
+	}))
+
+	require.NotEmpty(t, stream.events)
+	data := stream.events[len(stream.events)-1].Data
+	assert.Nil(t, data["route_intent"])
+	assert.Equal(t, "not_exposed", data["route_intent_status"])
+	assert.Equal(t, "global_videos", data["effective_scope"])
+	assert.Equal(t, "global_videos", data["execution_scope"])
+	assert.Equal(t, false, data["route_schema_valid"])
+	assert.Equal(t, "unknown_field", data["route_error_code"])
 }

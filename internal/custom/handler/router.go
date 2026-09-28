@@ -282,8 +282,10 @@ func buildRouter(deps *Deps) *gin.Engine {
 	// per-video metadata returned from the evidence pipeline.
 	chatScope := NewChatScopeHandlerWithEvidence(deps.DB, roles.Knowledge, roles.Evidence, agentID, tenantID)
 	api.GET("/chat/scope/global", chatScope.Global)
+	api.GET("/chat/scope/query", chatScope.Query)
 	chatEvidence := NewChatEvidenceHandlerWithWiki(deps.DB, deps.KnowledgeWeKnora, deps.Wiki, roles.Knowledge)
 	api.GET("/chat/evidence", chatEvidence.Lookup)
+	api.POST("/chat/evidence", chatEvidence.Lookup)
 	chatAudit := NewChatAuditHandler(deps.DB)
 	api.POST("/chat/source-audit", chatAudit.RecordSourceAudit)
 	chatWiki := NewChatWikiHandler(deps.DB, deps.Wiki, roles.Knowledge)

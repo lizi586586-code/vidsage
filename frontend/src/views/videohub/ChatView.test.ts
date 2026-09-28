@@ -9,8 +9,13 @@ test('chat page disables protected image hydration in native agent display', () 
   assert.match(componentSource, /:hydrate-protected-images="false"/)
 })
 
-test('chat page lays out assistant identity separately from the answer body', () => {
-  assert.match(componentSource, /\.message--assistant\s*\{[^}]*display:\s*grid/s)
+test('chat page lets the conversation message list scroll inside the fixed chat viewport', () => {
+  assert.match(componentSource, /\.conversation\s*\{[^}]*height:\s*calc\(100% - 4px\)[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s)
+  assert.match(componentSource, /\.conversation__messages\s*\{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s)
+})
+
+test('chat page renders assistant answers without a separate identity column', () => {
+  assert.match(componentSource, /\.message--assistant\s*\{[^}]*display:\s*block/s)
   assert.match(componentSource, /\.message--assistant \.message__bubble\s*\{[^}]*width:\s*100%/s)
 })
 

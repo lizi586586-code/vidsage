@@ -2,6 +2,7 @@ export type ChatScope = 'global' | 'video'
 
 export interface ChatRequestScope {
   scope: ChatScope
+  execution_scope?: 'current_video' | 'global_videos'
   agent_id?: string
   agent_enabled?: boolean
   auto_route?: boolean
@@ -53,6 +54,7 @@ export function buildChatRequest(
     body: {
       query,
       knowledge_base_ids: scope.knowledge_base_ids,
+      ...(scope.execution_scope ? { execution_scope: scope.execution_scope } : {}),
       // Keep both wiki source_refs and transcript fallback scoped to the
       // current video's active transcript generation.
       ...(scope.scope === 'video' || !scope.agent_id ? { knowledge_ids: scope.knowledge_ids } : {}),

@@ -18,15 +18,20 @@ type ChatScopeHandler struct {
 }
 
 type ChatScopeResponse struct {
-	Scope            string            `json:"scope"`
-	VideoID          string            `json:"video_id,omitempty"`
-	VideoTitle       string            `json:"video_title,omitempty"`
-	VideoCoverURL    string            `json:"video_cover_url,omitempty"`
-	AgentID          string            `json:"agent_id,omitempty"`
-	TenantID         string            `json:"tenant_id,omitempty"`
-	KnowledgeBaseIDs []string          `json:"knowledge_base_ids"`
-	KnowledgeIDs     []string          `json:"knowledge_ids"`
-	SessionMeta      map[string]string `json:"session_meta"`
+	Scope            string   `json:"scope"`
+	VideoID          string   `json:"video_id,omitempty"`
+	VideoTitle       string   `json:"video_title,omitempty"`
+	VideoCoverURL    string   `json:"video_cover_url,omitempty"`
+	AgentID          string   `json:"agent_id,omitempty"`
+	TenantID         string   `json:"tenant_id,omitempty"`
+	KnowledgeBaseIDs []string `json:"knowledge_base_ids"`
+	KnowledgeIDs     []string `json:"knowledge_ids"`
+	// ExecutionScope is the server-resolved access boundary. It never names
+	// the videos a user may be semantically asking about; those are discovered
+	// by WeKnora retrieval after routing.
+	ExecutionScope  string            `json:"execution_scope"`
+	ScopeResolution string            `json:"scope_resolution,omitempty"`
+	SessionMeta     map[string]string `json:"session_meta"`
 }
 
 func NewChatScopeHandler(db *gorm.DB, kbID, agentID, tenantID string) *ChatScopeHandler {
@@ -81,10 +86,22 @@ func (h *ChatScopeHandler) Global(c *gin.Context) {
 		TenantID:         h.tenantID,
 		KnowledgeBaseIDs: kbIDs,
 		KnowledgeIDs:     []string{},
+		ExecutionScope:   "global_videos",
+		ScopeResolution:  "global",
 		SessionMeta: h.sessionMeta(map[string]string{
-			"scope": "global",
+			"scope":           "global",
+			"execution_scope": "global_videos",
 		}),
 	}})
+}
+
+// Query is retained as a compatibility endpoint for older clients. A query
+// must never be used to resolve a semantic video set before routing: titles
+// may be abbreviated, misspelled, or refer to multiple videos. The trusted
+// boundary for a global question is therefore the same account-wide scope as
+// Global; WeKnora discovers candidate videos during retrieval.
+func (h *ChatScopeHandler) Query(c *gin.Context) {
+	h.Global(c)
 }
 
 func (h *ChatScopeHandler) Video(c *gin.Context) {
@@ -124,8 +141,10 @@ func (h *ChatScopeHandler) Video(c *gin.Context) {
 		TenantID:         h.tenantID,
 		KnowledgeBaseIDs: kbIDs,
 		KnowledgeIDs:     knowledgeIDs,
+		ExecutionScope:   "current_video",
 		SessionMeta: h.sessionMeta(map[string]string{
 			"scope":           "video",
+			"execution_scope": "current_video",
 			"video_id":        video.ID,
 			"video_title":     video.Title,
 			"video_cover_url": video.ThumbnailURL,

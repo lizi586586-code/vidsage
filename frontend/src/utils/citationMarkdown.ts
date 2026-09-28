@@ -4,6 +4,11 @@ import type { VideoEvidence, WikiFallback } from '@/types/videohub'
 
 /** Self-closing or unclosed `<kb/>` / `<web/>` tags from model output. */
 export const KB_WEB_TAG_RE = /<(?:kb|web)\b[^>]*?\s*\/?>/g
+const NONSTANDARD_CITATION_TAG_RE = /<复选(?:\s[^>]*?)?\s*\/?>/g
+
+export function stripNonstandardCitationTags(contentStr: string): string {
+  return String(contentStr || '').replace(NONSTANDARD_CITATION_TAG_RE, '')
+}
 const KB_TAG_ATTR_RE = /<kb\b([^>]*?)\s*\/?>/g
 const WEB_TAG_ATTR_RE = /<web\b([^>]*?)\s*\/?>/g
 
@@ -346,6 +351,7 @@ export function extractCitationHtmlPlaceholders(
 
   const normalizedContent = removeDuplicateVideoTitleBeforeCitation(contentStr, refs)
   const content = normalizedContent
+    .replace(NONSTANDARD_CITATION_TAG_RE, '')
     .replace(KB_WEB_TAG_RE, (match) => storeHtml(preprocessCitationTags(match, refs, options)))
     .replace(/\[\[([^\]]+)\]\]/g, (match) => storeHtml(preprocessCitationTags(match, refs, options)))
 

@@ -38,6 +38,7 @@ type AgentStreamHandler struct {
 	// sandbox after the agent completes. Nil when the sandbox backend
 	// doesn't support artifact collection or WeKnora was built without it.
 	artifactCollector *service.ArtifactCollector
+	route             routeMetadata
 
 	// State tracking
 	knowledgeRefs   []*types.SearchResult
@@ -243,6 +244,15 @@ func NewAgentStreamHandler(
 		evidenceScope:      videoevidence.NewScope(),
 		eventStartTimes:    make(map[string]time.Time),
 	}
+}
+
+// SetRouteMetadata attaches backend-resolved routing state to the stream
+// boundary. It is called before any agent event can be emitted.
+func (h *AgentStreamHandler) SetRouteMetadata(route routeMetadata) {
+	if h == nil {
+		return
+	}
+	h.route = route
 }
 
 // Subscribe subscribes to all agent streaming events on the dedicated EventBus
@@ -768,9 +778,11 @@ func (h *AgentStreamHandler) handleComplete(ctx context.Context, evt event.Event
 	// A terminal failure must never be persisted as a completed empty
 	// assistant message. The engine normally supplies a user-facing fallback;
 	// keep this boundary defensive for other failure paths and older agents.
-	if data.Outcome == "failed" && strings.TrimSpace(data.FinalAnswer) == "" {
+	if strings.TrimSpace(data.FinalAnswer) == "" && (data.Outcome == "failed" || data.FailureReason != "") {
 		if data.FailureReason == "answer_contract_truncated" {
 			data.FinalAnswer = "回答生成不完整，请重试。"
+		} else if data.FailureReason == "missing_video_coverage" {
+			data.FinalAnswer = "已找到部分视频证据，但尚未覆盖问题涉及的全部视频，请重试。"
 		} else if data.FailureReason == "answer_contract_invalid" {
 			data.FinalAnswer = "回答格式校验失败，请重试。"
 		} else {
@@ -889,7 +901,35 @@ func (h *AgentStreamHandler) handleComplete(ctx context.Context, evt event.Event
 		"outcome":           data.Outcome,
 		"route_mode":        agentRouteMode(h.assistantMessage.AgentID),
 	}
+	if h.route.AutoRoute {
+		completeData["route_intent_status"] = h.route.IntentStatus
+		completeData["route_intent"] = nil
+		if h.route.Intent != "" && h.route.IntentStatus == "exposed" {
+			completeData["route_intent"] = h.route.Intent
+		}
+		completeData["scope_hint"] = h.route.ScopeHint
+		completeData["execution_scope"] = h.route.ExecutionScope
+		completeData["execution_scope"] = h.route.ExecutionScope
+		completeData["required_capabilities"] = h.route.RequiredCapabilities
+		completeData["effective_scope_status"] = h.route.EffectiveScopeStatus
+		completeData["effective_scope"] = nil
+		if h.route.EffectiveScope != "" {
+			completeData["effective_scope"] = h.route.EffectiveScope
+		}
+		completeData["route_schema_valid"] = h.route.SchemaValid
+		if h.route.ErrorCode != "" {
+			completeData["route_error_code"] = h.route.ErrorCode
+		}
+	}
+	completeData["agent_id"] = h.assistantMessage.AgentID
 	projected, coverage := projectVideoEvidence(h.knowledgeRefs)
+	if data.Outcome == "failed" || data.FailureReason != "" {
+		if len(projected) > 0 {
+			coverage = "partial"
+		} else {
+			coverage = "none"
+		}
+	}
 	completeData["coverage"] = coverage
 	completeData["video_evidence"] = projected
 	if data.FailureReason != "" {

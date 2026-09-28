@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -47,6 +48,27 @@ func (f fakeChatEvidenceChunkResolver) GetKnowledge(_ context.Context, knowledge
 		return customweknora.ManualKnowledgeResult{}, gorm.ErrRecordNotFound
 	}
 	return knowledge, nil
+}
+
+func TestChatEvidenceAcceptsPostKnowledgeIDs(t *testing.T) {
+	db := openTestVideoDB(t)
+	if err := db.AutoMigrate(&model.VideoTranscriptChunk{}); err != nil {
+		t.Fatalf("migrate chunks: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/custom/chat/evidence",
+		bytes.NewBufferString(`{"knowledge_ids":["knowledge-1"]}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+
+	NewChatEvidenceHandler(db).Lookup(context)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", recorder.Code, recorder.Body.String())
+	}
 }
 
 func TestChatEvidenceMapsKnowledgeIDsToVideoSource(t *testing.T) {

@@ -126,7 +126,7 @@ func searchResultFromMap(row map[string]interface{}) *types.SearchResult {
 		stringValue(row, "chunk_id"),
 		stringValue(row, "faq_id"),
 	)
-	return &types.SearchResult{
+	result := &types.SearchResult{
 		ID:              id,
 		Content:         stringValue(row, "content"),
 		KnowledgeID:     stringValue(row, "knowledge_id"),
@@ -136,6 +136,12 @@ func searchResultFromMap(row map[string]interface{}) *types.SearchResult {
 		ChunkIndex:      intValue(row, "chunk_index"),
 		Metadata:        stringMap(row["metadata"]),
 	}
+	if raw := row["chunk_metadata"]; raw != nil {
+		if encoded, err := json.Marshal(raw); err == nil {
+			result.ChunkMetadata = types.JSON(encoded)
+		}
+	}
+	return result
 }
 
 func (e *AgentEngine) projectAnswerContract(

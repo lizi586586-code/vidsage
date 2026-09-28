@@ -189,6 +189,9 @@ function onSelect(agent: DisplayAgent) {
 }
 
 .picker-chip--tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 30px;
   padding: 0 8px;
   gap: 6px;
@@ -197,6 +200,8 @@ function onSelect(agent: DisplayAgent) {
   color: var(--td-text-color-secondary);
   background: transparent;
   font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
   white-space: nowrap;
 }
 
@@ -206,7 +211,15 @@ function onSelect(agent: DisplayAgent) {
 }
 
 .picker-chip--tool :deep(.t-icon) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
   font-size: 15px;
+  line-height: 1;
+  vertical-align: middle;
 }
 
 .picker-chip--tool .picker-chip__label {

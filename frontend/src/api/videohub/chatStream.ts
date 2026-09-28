@@ -25,6 +25,8 @@ export type ChatFailureReason =
   | 'reasoning_timeout'
   | 'answer_contract_truncated'
   | 'answer_contract_invalid'
+  | 'missing_video_coverage'
+  | 'missing_video_table'
   | 'empty_response'
   | 'final_answer_generation_failed'
   | 'llm_call_failed_after_tool_results'
@@ -37,6 +39,10 @@ export function failureMessageForReason(reason?: string) {
       return '回答生成不完整，请重试。'
     case 'answer_contract_invalid':
       return '回答格式校验失败，请重试。'
+    case 'missing_video_coverage':
+      return '已找到部分视频证据，但尚未覆盖问题涉及的全部视频，请重试。'
+    case 'missing_video_table':
+      return '已找到多个视频定位，但回答未按要求输出定位表格，请重试。'
     case 'empty_response':
       return '模型没有返回正文，请重试。'
     case 'reasoning_budget_exceeded':

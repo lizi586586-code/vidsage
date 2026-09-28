@@ -670,6 +670,21 @@ test('renderChatMarkdown projects validated transcript citations into clickable 
   assert.match(html, /data-video-seconds="192"/)
 })
 
+test('renderChatMarkdown removes nonstandard video citation tags', () => {
+  const html = renderChatMarkdown(
+    '定位内容 <复选 type="comparison" name="ref" id="c13"/>。',
+    {
+      renderer: createChatMarkdownRenderer(),
+      escapeMarkdown: (text) => text,
+      sanitizeHtml: (value) => value,
+      knowledgeReferences: [],
+    },
+  )
+
+  assert.doesNotMatch(html, /复选|c13/)
+  assert.match(html, /定位内容/)
+})
+
 test('renderChatMarkdown hides a video title when the question context already identifies the video', () => {
   const html = renderChatMarkdown(
     '相关位置见 <kb doc="提示词课程" chunk_id="chunk-1" />。',

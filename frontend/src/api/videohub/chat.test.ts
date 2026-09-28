@@ -119,6 +119,7 @@ test('uses final_answer from complete event when the agent did not emit answer c
 test('maps failed completion reasons to visible assistant text', () => {
   assert.equal(failureMessageForReason('answer_contract_truncated'), '回答生成不完整，请重试。')
   assert.equal(failureMessageForReason('answer_contract_invalid'), '回答格式校验失败，请重试。')
+  assert.equal(failureMessageForReason('missing_video_coverage'), '已找到部分视频证据，但尚未覆盖问题涉及的全部视频，请重试。')
   assert.equal(failureMessageForReason('unknown_failure'), '')
 })
 
@@ -223,6 +224,23 @@ test('keeps transcript chunk scope on video Agent requests for Wiki source_refs 
   )
 
   assert.deepEqual(request.body.knowledge_ids, ['chunk-1', 'chunk-2'])
+})
+
+test('keeps global execution scope open for native retrieval to discover videos', () => {
+  const request = buildChatRequest(
+    {
+      scope: 'global',
+      execution_scope: 'global_videos',
+      knowledge_base_ids: ['video-kb'],
+      knowledge_ids: [],
+    },
+    '请比较《视频一》和《视频二》',
+    'jwt-token',
+  )
+
+  assert.deepEqual(request.body.knowledge_base_ids, ['video-kb'])
+  assert.deepEqual(request.body.knowledge_ids, [])
+  assert.equal(request.body.execution_scope, 'global_videos')
 })
 
 test('preserves an explicit tenant header instead of replacing it with the selected tenant', () => {

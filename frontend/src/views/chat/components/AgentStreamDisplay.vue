@@ -45,7 +45,7 @@
                    reasoning is the expandable body. -->
               <div v-if="event.type === 'thinking'" class="tool-event">
                 <div class="action-card thinking-event-card"
-                  :class="{ 'action-pending': isThinkingActive(event.event_id) }">
+                  :class="{ 'action-pending': isThinkingActive(event.event_id), 'thinking-collapsed-active': isThinkingActive(event.event_id) && !isEventExpanded(event.event_id) }">
                   <div class="action-header" @click="toggleEvent(event.event_id)">
                     <div class="action-title" :class="{
                       'thinking-inline-title': !event.title && isEventExpanded(event.event_id),
@@ -72,7 +72,7 @@
               <!-- Thinking Tool Call -->
               <div v-else-if="event.type === 'tool_call' && event.tool_name === 'thinking'" class="tool-event">
                 <div class="action-card thinking-tool-card"
-                  :class="{ 'action-pending': event.pending || isThinkingActive(event.tool_call_id) }">
+                  :class="{ 'action-pending': event.pending || isThinkingActive(event.tool_call_id), 'thinking-collapsed-active': isThinkingActive(event.tool_call_id) && !isEventExpanded(event.tool_call_id) }">
                   <div class="action-header" @click="toggleEvent(event.tool_call_id)">
                     <div class="action-title">
                       <span class="action-title-icon icon-mask" :style="maskIconStyle(thinkingIcon, 18)"
@@ -255,7 +255,7 @@
              the expandable body. -->
             <div v-if="event.type === 'thinking'" class="tool-event">
               <div class="action-card thinking-event-card"
-                :class="{ 'action-pending': isThinkingActive(event.event_id) }">
+                :class="{ 'action-pending': isThinkingActive(event.event_id), 'thinking-collapsed-active': isThinkingActive(event.event_id) && !isEventExpanded(event.event_id) }">
                 <div class="action-header" @click="toggleEvent(event.event_id)">
                   <div class="action-title" :class="{
                     'thinking-inline-title': !event.title && isEventExpanded(event.event_id),
@@ -298,7 +298,7 @@
             <!-- Thinking Tool Call -->
             <div v-else-if="event.type === 'tool_call' && event.tool_name === 'thinking'" class="tool-event">
               <div class="action-card thinking-tool-card"
-                :class="{ 'action-pending': event.pending || isThinkingActive(event.tool_call_id) }">
+                :class="{ 'action-pending': event.pending || isThinkingActive(event.tool_call_id), 'thinking-collapsed-active': isThinkingActive(event.tool_call_id) && !isEventExpanded(event.tool_call_id) }">
                 <div class="action-header" @click="toggleEvent(event.tool_call_id)">
                   <div class="action-title">
                     <span class="action-title-icon icon-mask" :style="maskIconStyle(thinkingIcon, 18)" aria-hidden="true" />
@@ -464,7 +464,7 @@
       <div v-if="showAgentActivityIndicator" class="tree-child tree-child-last streaming-loading-node">
         <div class="tree-branch"></div>
         <div class="tree-child-content">
-          <div class="action-card action-pending">
+          <div class="action-card action-pending thinking-collapsed-active">
             <div class="action-header no-results">
               <div class="action-title">
                 <t-icon class="action-title-icon" name="lightbulb" />
@@ -831,7 +831,7 @@ interface SessionData {
   id?: string;
   assistant_message_id?: string;
   request_id?: string;
-  debugRequest?: Record<string, unknown>;
+  debugRequest?: import('@/utils/chatRequestDebug').ChatRequestDebugInfo;
   isAgentMode?: boolean;
   agentEventStream?: any[];
   knowledge_references?: any[];
@@ -850,6 +850,7 @@ const props = defineProps<{
   embedVisitorId?: string;
   ragMode?: boolean;
   showVideoTitle?: boolean;
+  showRequestInfo?: boolean;
   followUpLoading?: boolean;
 }>();
 
@@ -868,7 +869,7 @@ const embedAuthProps = computed(() => ({
 }));
 
 const showRequestInfo = computed(
-  () => !props.embeddedMode && !!(props.session?.request_id || props.session?.id),
+  () => props.showRequestInfo !== false && !props.embeddedMode && !!(props.session?.request_id || props.session?.id),
 );
 
 const shouldHydrateProtectedImages = computed(() => props.hydrateProtectedImages !== false);
@@ -3870,6 +3871,28 @@ const handleAddToKnowledge = (answerEvent: any) => {
     color: var(--td-text-color-secondary);
   }
 }
+
+/* Collapsed in-progress thinking: animate status cues without moving the card. */
+.thinking-collapsed-active .action-name,
+.thinking-collapsed-active .action-summary {
+  color: transparent;
+  background: linear-gradient(100deg, var(--td-text-color-secondary) 0%, var(--td-text-color-secondary) 32%, var(--td-text-color-primary) 50%, var(--td-text-color-secondary) 68%, var(--td-text-color-secondary) 100%);
+  background-size: 300% 100%;
+  background-position: 100% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-collapsed-shimmer 2.2s ease-in-out infinite;
+}
+.thinking-collapsed-active .action-title-icon { animation: thinking-collapsed-status 2.2s ease-in-out infinite; }
+@keyframes thinking-collapsed-shimmer { 0% { background-position: 100% 0; } 82%, 100% { background-position: 0 0; } }
+@keyframes thinking-collapsed-status { 0%, 82%, 100% { opacity: 0.58; } 42% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .thinking-collapsed-active .action-name,
+  .thinking-collapsed-active .action-summary { color: var(--td-text-color-secondary); background: none; -webkit-text-fill-color: currentColor; animation: none; }
+  .thinking-collapsed-active .action-title-icon { animation: none; }
+}
+
 </style>
 
 <style lang="less">

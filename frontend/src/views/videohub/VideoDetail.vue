@@ -1,12 +1,12 @@
 <template>
   <main ref="page" class="video-detail-page">
     <div v-if="loading" class="video-detail-page__state"><t-loading text="正在加载视频" /></div>
-    <div v-else-if="error" class="video-detail-page__state"><t-empty :description="error"><t-button @click="router.push('/platform/videos')">返回 Home</t-button></t-empty></div>
+    <div v-else-if="error" class="video-detail-page__state"><t-empty :description="error"><t-button @click="router.push('/platform/videos')">返回 Course</t-button></t-empty></div>
     <template v-else-if="video">
       <header class="video-detail-page__header">
         <t-button class="video-detail-page__back" variant="text" @click="router.push('/platform/videos')">
           <template #icon><t-icon name="chevron-left" /></template>
-          返回列表
+            返回课程库
         </t-button>
         <div class="video-detail-page__title">
           <h1>{{ video.title }}</h1>
@@ -18,7 +18,7 @@
       <div v-if="!isPlayable" class="video-detail-page__state">
         <t-empty :description="statusHint">
           <template #action>
-            <t-button @click="router.push('/platform/videos')">返回 Home</t-button>
+            <t-button @click="router.push('/platform/videos')">返回 Course</t-button>
           </template>
         </t-empty>
         <t-alert v-if="video.status === 'failed' && video.processing_error_summary" class="video-detail-page__error" theme="error" :message="video.processing_error_summary" />

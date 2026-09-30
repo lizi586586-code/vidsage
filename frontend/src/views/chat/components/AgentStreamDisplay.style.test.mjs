@@ -7,6 +7,43 @@ import test from 'node:test'
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AgentStreamDisplay.vue'), 'utf8')
 
+test('collapsed active thinking pulses in gray even on hover and focus, with reduced-motion support', () => {
+  const style = source.slice(source.indexOf('/* Collapsed in-progress thinking:'))
+  assert.match(style, /\.action-card\.thinking-collapsed-active:hover \.action-name/)
+  assert.match(style, /\.action-card\.thinking-collapsed-active:focus-within \.action-summary/)
+  assert.match(style, /color:\s*var\(--td-text-color-secondary\)/)
+  assert.match(style, /background:\s*none/)
+  assert.match(style, /-webkit-text-fill-color:\s*currentColor/)
+  assert.match(style, /animation:\s*thinking-collapsed-status 2.2s ease-in-out infinite/)
+  assert.doesNotMatch(style.split('@media')[0], /td-text-color-primary|linear-gradient|thinking-collapsed-shimmer/)
+  assert.match(style, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation:\s*none/)
+})
+
+test('answer actions retain copy and artifact download but remove bookmarking', () => {
+  const template = source.split('<script')[0]
+  assert.doesNotMatch(template, /bookmark-add|handleAddToKnowledge|agent\.addToKnowledgeBase/)
+  assert.match(template, /@click\.stop="handleCopyAnswer\(event\)"/)
+  assert.match(template, /v-if="hasArtifacts"/)
+  assert.match(template, /@click\.stop="openArtifactDrawer"/)
+})
+
+test('all thinking tool title overlays use 12px regardless of popup teleport', () => {
+  assert.match(source, /const thinkingTooltipStyle = \{ fontSize: '12px', lineHeight: '20px' \}/)
+  assert.equal((source.match(/:overlay-inner-style="thinkingTooltipStyle"/g) || []).length, 4)
+  const titleTooltips = source.match(/<t-tooltip[^>]*:content="(?:t\('agent.updatePlan'\)|getToolTitle\(event\))"[^>]*>/g) || []
+  assert.equal(titleTooltips.length, 4)
+  for (const tooltip of titleTooltips) assert.match(tooltip, /:overlay-inner-style="thinkingTooltipStyle"/)
+})
+
+test('wider thinking rows keep tools and memory on the same axis', () => {
+  assert.match(source, /--agent-step-indent:\s*30px/)
+  assert.match(source, /\.tree-child\s*\{[^}]*padding-left:\s*var\(--agent-step-indent\)/s)
+  assert.match(source, /\.tree-child-content\s*\{[^}]*min-width:\s*0[^}]*width:\s*100%/s)
+  assert.match(source, /\.tree-child \.action-title-icon\s*\{[^}]*left:\s*calc\(-1 \* var\(--agent-step-indent\)\)/s)
+  const memory = readFileSync(join(here, 'ChatMemoryStep.vue'), 'utf8')
+  assert.match(memory, /left:\s*calc\(-1 \* var\(--agent-step-indent, 42px\)\)/)
+})
+
 test('agent steps use compact muted timeline styling', () => {
   assert.match(source, /--agent-step-text-size:\s*12px/)
   assert.match(source, /--agent-step-summary-size:\s*12px/)
@@ -137,7 +174,7 @@ test('agent mode shows a native placeholder before answer whenever nothing is pe
   assert.match(source, /const hasPendingStreamingActivity = computed/)
   assert.match(source, /event\.thinking === true \|\| isThinkingActive\(event\.event_id\)/)
   assert.match(source, /event\.type === 'tool_approval_required' \|\| event\.type === 'mcp_oauth_required'/)
-  assert.match(source, /class="action-card action-pending"/)
+  assert.match(source, /class="action-card action-pending thinking-collapsed-active"/)
   assert.match(source, /t\('chat\.thinkingAlt'\)/)
   assert.match(source, /chat-timeline-loading\.less/)
 })

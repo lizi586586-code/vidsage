@@ -32,9 +32,9 @@
         @blur="submitTitleEdit"
       />
     </form>
-    <span v-else class="submenu_title" :class="batchMode ? 'submenu_title--batch' : ''" :title="item.title">
+    <span v-else class="submenu_title" :class="batchMode ? 'submenu_title--batch' : ''" :title="displayTitle">
       <t-icon v-if="item.is_pinned" name="pin" class="submenu_pin_icon" />
-      <span class="submenu_title-text">{{ item.title }}</span>
+      <span class="submenu_title-text">{{ displayTitle }}</span>
     </span>
     <div v-if="!batchMode" class="session-row-menu-wrap" @click.stop>
       <t-popup
@@ -145,6 +145,14 @@ const menuMode = ref<MenuMode>('menu')
 const titleEditing = ref(false)
 const titleDraft = ref('')
 const titleInputRef = ref<HTMLInputElement | null>(null)
+
+const displayTitle = computed(() => {
+  const title = String(props.item.title || '').trim()
+  return title
+    .replace(/^全局视频问答\s*[:：]\s*/u, '')
+    .replace(/^《[^》]+》\s*[:：]\s*/u, '')
+    .trim() || title
+})
 
 const menuOverlayClass = computed(() => (
   menuMode.value === 'menu'

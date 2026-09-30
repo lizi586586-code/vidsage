@@ -83,6 +83,24 @@ export function dedupeNativeAnswerEvents(events: Record<string, unknown>[]) {
   return events.filter((event, index) => event.type !== 'answer' || index === keepIndex)
 }
 
+export function finalizeStoppedAgentEvents(events: Record<string, unknown>[], answer: string) {
+  const stoppedEvents = events.map(event => ({ ...event }))
+  const partialAnswer = answer.trim()
+  if (partialAnswer) {
+    const answerEvent = [...stoppedEvents].reverse().find(event => event.type === 'answer')
+    if (answerEvent) {
+      answerEvent.content = partialAnswer
+      answerEvent.done = true
+    } else {
+      stoppedEvents.push({ type: 'answer', content: partialAnswer, done: true })
+    }
+  }
+  if (!stoppedEvents.some(event => event.type === 'stop')) {
+    stoppedEvents.push({ type: 'stop', reason: 'user_requested', done: true })
+  }
+  return dedupeNativeAnswerEvents(stoppedEvents)
+}
+
 export function displayQuestionFromStoredContent(content: string) {
   const marker = '用户问题：'
   const index = content.lastIndexOf(marker)

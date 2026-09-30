@@ -5,12 +5,6 @@
   }">
     <button ref="triggerRef" type="button" class="session-source-filter__trigger" :aria-expanded="open"
       aria-haspopup="listbox" @click.stop="toggleOpen">
-      <span class="session-source-filter__leading">
-        <img v-if="currentOption?.logo" :src="currentOption.logo" :alt="currentOption.label"
-          class="session-source-filter__logo" />
-        <t-icon v-else :name="iconFor(currentOption)" class="session-source-filter__icon" size="14px" />
-        <span class="session-source-filter__label" :title="currentOption?.label">{{ currentOption?.label }}</span>
-      </span>
       <t-icon v-if="inline" name="chevron-down" class="session-source-filter__chevron"
         :class="{ 'session-source-filter__chevron--open': open }" size="10px" />
       <t-icon v-else name="chevron-down" class="session-source-filter__chevron"
@@ -153,10 +147,6 @@ onBeforeUnmount(() => {
     min-width: 0;
     max-width: 100%;
 
-    .session-source-filter__leading {
-      gap: 4px;
-      flex: 0 1 auto;
-    }
   }
 }
 
@@ -201,7 +191,6 @@ onBeforeUnmount(() => {
   }
 }
 
-.session-source-filter__leading,
 .session-source-filter__option-leading {
   display: inline-flex;
   align-items: center;
@@ -210,7 +199,6 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
 }
 
-.session-source-filter__label,
 .session-source-filter__option-label {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -859,6 +859,25 @@ test('renderChatMarkdown keeps an unresolved video citation as plain text', () =
   assert.doesNotMatch(html, /data-kb-id=/)
 })
 
+test('renderChatMarkdown hides citations without readable source details', () => {
+  const html = renderChatMarkdown(
+    '<kb doc="标题但无正文" chunk_id="chunk-title-only" />',
+    {
+      renderer: createChatMarkdownRenderer(),
+      escapeMarkdown: (text) => text,
+      sanitizeHtml: (value) => value,
+      hideUnavailableCitations: true,
+      knowledgeReferences: [{
+        id: 'chunk-title-only',
+        knowledge_title: '标题但无正文',
+      }],
+    },
+  )
+
+  assert.doesNotMatch(html, /citation/)
+  assert.doesNotMatch(html, /标题但无正文/)
+})
+
 test('collapseStandaloneCitationParagraphs merges standalone video citations into previous text', () => {
   const html = '<p>提示词公式见</p><p><button type="button" class="video-citation" data-video-id="video-1">「03:12–03:48」</button></p>'
   const out = collapseStandaloneCitationParagraphs(html)

@@ -4,25 +4,46 @@
       <section v-if="expanded" class="assistant-drawer">
         <header>
           <div>
-            <span>{{ globalMode ? firstQuestion : `围绕《${currentVideo.title}》提问` }}</span>
+            <span v-if="firstQuestion">{{ firstQuestion }}</span>
           </div>
           <t-button variant="text" shape="square" aria-label="收起" @click="expanded = false">
             <t-icon name="chevron-down" />
           </t-button>
         </header>
         <div ref="messageArea" class="assistant-messages">
-          <div v-for="(message, messageIndex) in messages" :key="message.id" :class="['assistant-message', `assistant-message--${message.sender}`]">
+          <div v-for="(message, messageIndex) in messages" :key="message.id" :class="['assistant-message', `assistant-message--${message.sender}`, { 'assistant-message--welcome': message.id.startsWith('welcome-') }]">
             <AgentStreamDisplay
               v-if="shouldUseNativeAgentDisplay(message)"
               :session="toNativeAgentSession(message)"
               :session-id="activeSession?.id"
               :user-query="questionForMessage(messageIndex) || lastUserQuery"
               :show-video-title="shouldShowVideoTitle(message, messageIndex)"
+              :show-request-info="false"
               :hydrate-protected-images="false"
               @click="handleRenderedAnswerClick"
               @video-navigate="handleVideoNavigate"
             />
             <div v-else-if="message.sender === 'assistant' && message.text" class="assistant-rendered-answer markdown-content" v-html="renderAssistantAnswer(message.text, message.knowledge_references, questionForMessage(messageIndex))" @click="handleRenderedAnswerClick" @keydown="handleRenderedAnswerKeydown"></div>
+            <template v-else-if="message.sender === 'user' && message.text">
+              <form v-if="editingMessageId === message.id" class="assistant-message-edit" @submit.prevent="resendEditedMessage">
+                <textarea v-model="editingMessageText" rows="3" aria-label="编辑已发送指令" @keydown.esc.prevent="cancelMessageEdit" />
+                <div class="assistant-message-edit__actions">
+                  <t-button size="small" variant="text" type="button" @click="cancelMessageEdit">取消</t-button>
+                  <t-button size="small" variant="text" theme="primary" type="submit" :disabled="!editingMessageText.trim()">重新发送</t-button>
+                </div>
+              </form>
+              <template v-else>
+                <div class="assistant-user-content">
+                <p
+                  :class="{ 'assistant-user-content__text--editable': canEditMessage(message, messageIndex) }"
+                  :role="canEditMessage(message, messageIndex) ? 'button' : undefined"
+                  :tabindex="canEditMessage(message, messageIndex) ? 0 : undefined"
+                  @click="canEditMessage(message, messageIndex) && startMessageEdit(message)"
+                  @keydown.enter.prevent="canEditMessage(message, messageIndex) && startMessageEdit(message)"
+                >{{ message.text }}</p>
+                </div>
+              </template>
+            </template>
             <p v-else-if="message.text"><template v-for="(part, index) in splitTimestamps(message.text, message.evidenceLinks)" :key="index"><button v-if="part.seconds !== undefined" class="timestamp" type="button" @click="selectTimestamp(part)">{{ part.text }}</button><template v-else>{{ part.text }}</template></template></p>
             <small v-else-if="message.activityText" class="assistant-activity">{{ message.activityText }}</small>
           </div>
@@ -35,24 +56,31 @@
           <textarea
             v-model="input"
             rows="2"
-            :disabled="isGenerating"
             :placeholder="globalMode ? '向 AI 提问知识库全部视频内容' : '向 AI 提问当前视频内容'"
             @focus="expanded = true"
             @keydown.enter.exact.prevent="send(input)"
           />
           <div class="assistant-composer__tools">
-            <t-button class="chat-tool" variant="text" type="button" aria-label="添加附件" @click="showToolMessage('添加附件')">
-              <t-icon name="attach" /><span>添加附件</span>
-            </t-button>
-            <t-button class="chat-tool" variant="text" type="button" aria-label="语音输入" @click="showToolMessage('语音输入')">
-              <t-icon name="microphone" /><span>语音输入</span>
-            </t-button>
-            <VideohubAgentPicker appearance="tool" tool-label="自动路由" />
+            <VideohubAgentPicker appearance="tool" />
           </div>
         </div>
-        <t-button class="chat-send" type="submit" shape="square" :disabled="isGenerating || !input.trim()">
-          <t-icon name="arrow-up" />
-        </t-button>
+        <div class="chat-actions">
+          <t-tooltip content="语音输入" placement="top">
+            <t-button class="chat-voice" type="button" shape="square" aria-label="语音输入" @click="showToolMessage('语音输入')">
+              <svg class="chat-voice__icon" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
+                <path d="M486.4 972.8v-128.9728A332.8 332.8 0 0 1 179.2 512a25.6 25.6 0 0 1 51.2 0 281.6 281.6 0 0 0 563.2 0 25.6 25.6 0 1 1 51.2 0 332.8 332.8 0 0 1-307.2 331.8272V972.8h153.6a25.6 25.6 0 1 1 0 51.2h-358.4a25.6 25.6 0 1 1 0-51.2h153.6zM512 51.2a153.6 153.6 0 0 0-153.6 153.6v307.2a153.6 153.6 0 0 0 307.2 0V204.8a153.6 153.6 0 0 0-153.6-153.6z m0-51.2a204.8 204.8 0 0 1 204.8 204.8v307.2a204.8 204.8 0 1 1-409.6 0V204.8a204.8 204.8 0 0 1 204.8-204.8z" fill="currentColor" />
+              </svg>
+            </t-button>
+          </t-tooltip>
+          <t-tooltip v-if="isGenerating" content="暂停生成" placement="top">
+            <t-button class="chat-send chat-pause" type="button" shape="square" aria-label="暂停生成" @click="pauseGeneration">
+              <t-icon name="pause-circle" />
+            </t-button>
+          </t-tooltip>
+          <t-button v-else class="chat-send" type="submit" shape="square" aria-label="发送" :disabled="!input.trim()">
+            <t-icon name="arrow-up" />
+          </t-button>
+        </div>
       </form>
     </div>
   </div>
@@ -66,7 +94,7 @@ const assistantSessionCache = new Map<string, unknown>()
 import { computed, nextTick, ref, watch } from 'vue'
 import { marked } from 'marked'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { createChatTurn } from '@/api/videohub/chat'
+import { createChatTurn, loadChatSession } from '@/api/videohub/chat'
 import type { StreamingChatMessage } from '@/api/videohub/chat'
 import type { ChatKnowledgeReference, ChatMessage, ChatSession, VideoData } from '@/types/videohub'
 import AgentStreamDisplay from '@/views/chat/components/AgentStreamDisplay.vue'
@@ -75,6 +103,14 @@ import { useSettingsStore } from '@/stores/settings'
 import { sanitizeMarkdownHTML } from '@/utils/security'
 import { configureMarkedForChatMarkdown, renderChatMarkdown } from '@/utils/chatMarkdownRenderer'
 import { shouldAutoRoute } from '@/api/videohub/chatRequest'
+import { learningQuotes, nextLearningQuote } from '@/utils/learningQuotes'
+import {
+  assistantRecoveryKey,
+  clearChatRecovery,
+  getChatRecoveryStorage,
+  readChatRecovery,
+  writeChatRecovery,
+} from '@/api/videohub/chatRecovery'
 
 type TimestampPart = { text: string; seconds?: number; videoId?: string }
 
@@ -85,31 +121,44 @@ const expanded = ref(false), input = ref(''), isGenerating = ref(false), message
 const messages = ref<StreamingChatMessage[]>([])
 const activeSession = ref<ChatSession | null>(null)
 const lastUserQuery = ref('')
+const editingMessageId = ref('')
+const editingMessageText = ref('')
 const globalSuggestions = ['帮我总结一下全部视频的核心观点', '最近上传了哪些重要视频？', '帮我找关于培训内容的视频']
 const singleSuggestions = ['总结这段视频的核心观点', '有哪些值得记录的知识点？', '给出三个可执行建议']
 const suggestions = props.globalMode ? globalSuggestions : singleSuggestions
 let consumedExternalQuery = ''
 const streamingAssistantId = ref('')
+const stopCurrentTurn = ref<null | (() => Promise<void>)>(null)
+const recoveryStorage = getChatRecoveryStorage()
+const welcomeQuote = ref<string>(learningQuotes[0])
 
 const streamingAssistantVisible = computed(() => messages.value.some(message =>
   message.id === streamingAssistantId.value && Boolean(message.text || message.thinkingText || message.activityText),
 ))
-const firstQuestion = computed(() => messages.value.find(message => message.sender === 'user')?.text || '全局视频问答')
+const firstQuestion = computed(() => messages.value.find(message => message.sender === 'user')?.text || '')
 
 const answerRenderer = new marked.Renderer()
 configureMarkedForChatMarkdown()
 
 const sessionCacheKey = computed(() => props.globalMode ? 'global' : `video:${props.currentVideo.id}`)
 
-function welcome(video: VideoData, global: boolean): StreamingChatMessage {
+function welcome(video: VideoData): StreamingChatMessage {
   return {
     id: `welcome-${video.id}`,
     sender: 'assistant',
-    text: global ? '你好，我可以基于知识库全部视频回答问题，回答中会标注来自哪条视频的哪个时间点。' : `你好，我可以基于《${video.title}》回答问题。`,
+    text: welcomeQuote.value,
     timestamp: ''
   }
 }
-messages.value = [welcome(props.currentVideo, props.globalMode)]
+function rotateWelcomeQuote() {
+  welcomeQuote.value = nextLearningQuote()
+  for (const message of messages.value) {
+    if (message.id.startsWith('welcome-')) message.text = welcomeQuote.value
+  }
+}
+watch(expanded, (open, wasOpen) => {
+  if (open && !wasOpen) rotateWelcomeQuote()
+}, { flush: 'sync' })
 restoreCachedSession()
 function splitTimestamps(text: string, evidenceLinks: ChatMessage['evidenceLinks'] = []): TimestampPart[] {
   return text.split(/(\[\d{2}:\d{2}(?:[–-]\d{2}:\d{2})?\])/g).filter(Boolean).map(part => {
@@ -137,6 +186,7 @@ function toNativeAgentSession(message: StreamingChatMessage) {
     is_completed: message.is_completed ?? false,
     agentEventStream: message.agentEventStream || [],
     knowledge_references: message.knowledge_references || [],
+    debugRequest: message.debugRequest,
   }
 }
 
@@ -146,6 +196,18 @@ function questionForMessage(index: number): string {
     if (message?.sender === 'user') return message.text
   }
   return props.externalQuery || ''
+}
+function hasAnswerOutputAfter(index: number): boolean {
+  const nextAssistant = messages.value.slice(index + 1).find(message => message.sender === 'assistant')
+  if (!nextAssistant) return false
+  if (nextAssistant.text?.trim() || nextAssistant.content?.trim()) return true
+  return Boolean(nextAssistant.agentEventStream?.some(event => {
+    const item = event as { type?: string; content?: string }
+    return (item.type === 'answer' || item.type === 'complete') && Boolean(item.content?.trim())
+  }))
+}
+function canEditMessage(message: StreamingChatMessage, index: number): boolean {
+  return message.sender === 'user' && !isGenerating.value && !hasAnswerOutputAfter(index)
 }
 
 function shouldShowVideoTitle(message: StreamingChatMessage, index: number): boolean {
@@ -160,6 +222,7 @@ function renderAssistantAnswer(text: string, references: ChatKnowledgeReference[
     streaming: false,
     knowledgeReferences: references,
     showVideoTitle: false,
+    hideUnavailableCitations: true,
   })
   return html.replace(/\[(\d{2}:\d{2}(?:[–-]\d{2}:\d{2})?)\]/g, '<button type="button" class="timestamp">[$1]</button>')
 }
@@ -202,8 +265,21 @@ function showToolMessage(label: string) {
 
 function restoreCachedSession() {
   const cached = assistantSessionCache.get(sessionCacheKey.value) as ChatSession | undefined
-  activeSession.value = cached || null
-  messages.value = cached ? [welcome(props.currentVideo, props.globalMode), ...cached.messages] : [welcome(props.currentVideo, props.globalMode)]
+  if (cached) {
+    activeSession.value = cached
+    messages.value = [welcome(props.currentVideo), ...cached.messages]
+    return
+  }
+  const pending = readChatRecovery(recoveryStorage, assistantRecoveryKey(props.globalMode ? 'global' : 'video', props.currentVideo.id))
+  activeSession.value = null
+  messages.value = [welcome(props.currentVideo)]
+  if (!pending) return
+  if (!pending.sessionId) {
+    input.value = pending.question
+    expanded.value = true
+    return
+  }
+  void restorePersistedSession(pending)
 }
 
 function cacheSession(session: ChatSession) {
@@ -214,6 +290,49 @@ function materializeActiveSession(session: ChatSession) {
   const currentMessages = messages.value.filter(message => !message.id.startsWith('welcome-'))
   activeSession.value = { ...session, messages: currentMessages }
   cacheSession(activeSession.value)
+  writeChatRecovery(recoveryStorage, assistantRecoveryKey(props.globalMode ? 'global' : 'video', props.currentVideo.id), {
+    scope: props.globalMode ? 'global' : 'video',
+    question: lastUserQuery.value,
+    sessionId: session.id,
+    videoId: props.globalMode ? undefined : props.currentVideo.id,
+    videoTitle: props.globalMode ? undefined : props.currentVideo.title,
+    title: session.title,
+    updatedAt: Date.now(),
+  })
+}
+
+function recoveredSessionFromPending(sessionId: string, pendingQuestion: string): ChatSession {
+  return {
+    id: sessionId,
+    title: pendingQuestion.slice(0, 24),
+    type: props.globalMode ? 'chat' : 'video',
+    time: '刚刚',
+    messages: [],
+    scope: props.globalMode ? 'global' : 'video',
+    videoId: props.globalMode ? undefined : props.currentVideo.id,
+    videoTitle: props.globalMode ? undefined : props.currentVideo.title,
+  }
+}
+
+async function restorePersistedSession(pending: NonNullable<ReturnType<typeof readChatRecovery>>) {
+  const key = assistantRecoveryKey(props.globalMode ? 'global' : 'video', props.currentVideo.id)
+  try {
+    const loaded = await loadChatSession(recoveredSessionFromPending(pending.sessionId!, pending.question))
+    if (!loaded.messages.some(message => message.sender === 'user' && message.text.trim() === pending.question.trim())) {
+      loaded.messages = [
+        ...loaded.messages,
+        { id: `recovered-user-${Date.now()}`, sender: 'user', text: pending.question, timestamp: '刚刚' },
+      ]
+    }
+    activeSession.value = loaded
+    cacheSession(loaded)
+    messages.value = [welcome(props.currentVideo), ...loaded.messages]
+    clearChatRecovery(recoveryStorage, key)
+    void scrollBottom()
+  } catch {
+    input.value = pending.question
+    expanded.value = true
+  }
 }
 
 function selectTimestamp(part: TimestampPart) {
@@ -225,9 +344,38 @@ function selectTimestamp(part: TimestampPart) {
   if (!props.globalMode) emit('seek', part.seconds)
 }
 async function scrollBottom() { await nextTick(); if (messageArea.value) messageArea.value.scrollTop = messageArea.value.scrollHeight }
+function pauseGeneration() {
+  const stop = stopCurrentTurn.value
+  if (!stop) return
+  stopCurrentTurn.value = null
+  void stop()
+}
+function startMessageEdit(message: StreamingChatMessage) {
+  if (isGenerating.value || message.sender !== 'user') return
+  editingMessageId.value = message.id
+  editingMessageText.value = message.text
+}
+function cancelMessageEdit() {
+  editingMessageId.value = ''
+  editingMessageText.value = ''
+}
+async function resendEditedMessage() {
+  const value = editingMessageText.value.trim()
+  if (!value || isGenerating.value) return
+  cancelMessageEdit()
+  await send(value)
+}
 async function send(value: string) {
   const question = value.trim(); if (!question || isGenerating.value) return
   lastUserQuery.value = question
+  const recoveryKey = assistantRecoveryKey(props.globalMode ? 'global' : 'video', props.currentVideo.id)
+  writeChatRecovery(recoveryStorage, recoveryKey, {
+    scope: props.globalMode ? 'global' : 'video',
+    question,
+    videoId: props.globalMode ? undefined : props.currentVideo.id,
+    videoTitle: props.globalMode ? undefined : props.currentVideo.title,
+    updatedAt: Date.now(),
+  })
   expanded.value = true; input.value = ''
   messages.value.push({ id: `user-${Date.now()}`, sender: 'user', text: question, timestamp: '' })
   const assistantId = `assistant-${Date.now()}`
@@ -252,18 +400,24 @@ async function send(value: string) {
       session: activeSession.value || undefined,
       onSessionCreated: materializeActiveSession,
       onStreamMessage: updateStreamingMessage,
+      onStopReady: stop => { stopCurrentTurn.value = stop },
     })
     activeSession.value = session
     cacheSession(session)
-    messages.value = [welcome(props.currentVideo, props.globalMode), ...session.messages]
+    messages.value = [welcome(props.currentVideo), ...session.messages]
+    clearChatRecovery(recoveryStorage, recoveryKey)
   }
   catch (error) {
     const text = error instanceof Error ? error.message : '问答生成失败，请稍后重试'
     messages.value.push({ id: `error-${Date.now()}`, sender: 'assistant', text, timestamp: '' })
     MessagePlugin.error(text)
-  } finally { isGenerating.value = false; streamingAssistantId.value = ''; await scrollBottom() }
+  } finally { isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null; await scrollBottom() }
 }
-watch([() => props.currentVideo.id, () => props.globalMode], () => { input.value = ''; isGenerating.value = false; streamingAssistantId.value = ''; restoreCachedSession() })
+watch([() => props.currentVideo.id, () => props.globalMode], () => {
+  input.value = ''; isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null
+  if (expanded.value) rotateWelcomeQuote()
+  restoreCachedSession()
+})
 watch(() => props.externalQuery, value => { if (value && value !== consumedExternalQuery) { consumedExternalQuery = value; void send(value) } }, { immediate: true })
 </script>
 
@@ -326,6 +480,11 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
 }
 
 .assistant-drawer header span {
+  display: block;
+  max-width: calc(100% - 40px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--td-text-color-secondary);
   font: var(--td-font-body-small);
   line-height: 20px;
@@ -339,49 +498,92 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   overflow-y: auto;
   max-height: none;
   overscroll-behavior: contain;
-  padding: 20px 16px 14px;
+  padding: 4px 8px 84px 16px;
   color: var(--td-text-color-primary);
   font: var(--td-font-body-medium);
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--td-text-color-placeholder) 38%, transparent) transparent;
+  scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
 
-.assistant-messages::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-  border: 0;
-  background: transparent;
-}
-
-.assistant-messages::-webkit-scrollbar-track,
-.assistant-messages::-webkit-scrollbar-track-piece,
-.assistant-messages::-webkit-scrollbar-corner {
-  border: 0;
-  outline: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.assistant-messages::-webkit-scrollbar-thumb {
-  min-height: 36px;
-  border: 0;
-  border-radius: var(--td-radius-round);
-  background: color-mix(in srgb, var(--td-text-color-placeholder) 38%, transparent);
-  box-shadow: none;
-}
-
-.assistant-messages::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--td-text-color-secondary) 48%, transparent);
-}
+.assistant-messages::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 .assistant-message {
   display: flex;
   margin-bottom: 20px;
 }
 
+.assistant-message--welcome {
+  margin-bottom: 8px;
+}
+
+.assistant-message--welcome .assistant-rendered-answer {
+  display: flex;
+  align-items: flex-start;
+  min-height: 80px;
+  padding-top: 2px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.assistant-message--welcome .assistant-rendered-answer :deep(p) {
+  margin: 0;
+  white-space: normal;
+}
+
 .assistant-message--user {
   justify-content: flex-end;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 24px;
+}
+
+.assistant-user-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: 100%;
+  min-width: 0;
+}
+
+.assistant-message-edit {
+  display: grid;
+  gap: 8px;
+  width: min(520px, 72vw);
+}
+
+.assistant-message-edit textarea {
+  width: 100%;
+  min-height: 72px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: var(--td-radius-medium);
+  background: var(--td-bg-color-container);
+  color: var(--td-text-color-primary);
+  font: var(--td-font-body-medium);
+}
+
+.assistant-message-edit__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.assistant-message-edit__actions :deep(.t-button) {
+  border: 0;
+  background: transparent;
+  color: var(--td-text-color-secondary);
+}
+
+.assistant-message-edit__actions :deep(.t-button:hover),
+.assistant-message-edit__actions :deep(.t-button:focus-visible) {
+  background: transparent;
+  color: var(--td-brand-color);
+}
+
+.assistant-message-edit__actions :deep(.t-button--theme-primary) {
+  color: var(--td-brand-color);
 }
 
 .assistant-message--assistant {
@@ -401,6 +603,25 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   line-height: 1.7;
   white-space: pre-wrap;
   text-align: left;
+}
+
+.assistant-user-content > p {
+  box-sizing: border-box;
+  max-width: 90%;
+  border: 0;
+  background: var(--td-bg-color-secondarycontainer);
+  overflow-wrap: anywhere;
+}
+
+.assistant-user-content__text--editable {
+  cursor: text;
+}
+
+.assistant-user-content__text--editable:hover,
+.assistant-user-content__text--editable:focus-visible {
+  background: transparent;
+  color: var(--td-brand-color);
+  outline: 0;
 }
 
 .assistant-message--assistant p {
@@ -469,7 +690,14 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
 }
 
 .assistant-suggestions button {
-  padding: 2px 10px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 20px;
+  min-height: 20px;
+  padding: 0 10px;
   border: 1px solid var(--td-component-stroke);
   border-radius: var(--td-radius-round);
   background: var(--td-bg-color-container);
@@ -515,7 +743,12 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   color: var(--td-text-color-primary);
   font: var(--td-font-body-medium);
   line-height: 1.6;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
+
+.assistant-composer textarea::-webkit-scrollbar,
+.assistant-message-edit textarea::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 .assistant-composer textarea::placeholder {
   color: var(--td-text-color-placeholder);
@@ -533,49 +766,50 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   flex: 0 0 auto;
 }
 
-.chat-tool {
-  display: inline-flex;
+.chat-actions {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 8px;
-  border-radius: var(--td-radius-medium);
-  color: var(--td-text-color-secondary);
-  font-size: 12px;
-  line-height: 1;
-  vertical-align: middle;
+  gap: 8px;
 }
 
-.chat-tool:hover {
-  color: var(--td-text-color-primary);
-  background: rgba(0, 0, 0, .05);
-}
-
-.chat-tool :deep(.t-icon) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 15px;
-  width: 15px;
-  height: 15px;
-  font-size: 15px;
-  line-height: 1;
-  vertical-align: middle;
-}
-
-.chat-send {
+.chat-send,
+.chat-voice {
   width: 36px;
   height: 36px;
   flex: 0 0 36px;
   border-radius: var(--td-radius-large);
-  color: #fff;
+}
+
+.chat-send {
+  color: var(--td-text-color-anti);
   background: var(--td-brand-color);
   box-shadow: 0 6px 14px rgba(7, 192, 95, .24);
 }
 
+.chat-voice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--td-text-color-secondary);
+  border: 1px solid var(--td-component-stroke);
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-voice__icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
 .chat-send:hover {
   background: var(--td-brand-color-active);
+}
+
+.chat-voice:hover {
+  border-color: var(--td-component-stroke-hover);
+  background: var(--td-bg-color-secondarycontainer);
+  color: var(--td-text-color-primary);
 }
 
 .chat-send:disabled {
@@ -623,8 +857,5 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
     width: calc(100% - 20px);
   }
 
-  .chat-tool span {
-    display: none;
-  }
 }
 </style>

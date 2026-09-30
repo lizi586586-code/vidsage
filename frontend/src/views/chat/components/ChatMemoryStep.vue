@@ -98,7 +98,7 @@ const memoryKindLabel = (kind: string) => {
 
 .memory-icon {
   position: absolute;
-  left: -42px;
+  left: calc(-1 * var(--agent-step-indent, 42px));
   top: 3px;
   width: 18px;
   height: 18px;

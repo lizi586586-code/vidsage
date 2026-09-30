@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -91,7 +92,8 @@ func CandidateFromSearchResult(result *types.SearchResult) (Candidate, bool) {
 		VideoID:              metadata[metadataVideoID],
 		VideoTitle:           firstNonEmpty(metadata[metadataVideoTitle], result.KnowledgeTitle),
 		TranscriptGeneration: metadata[metadataGeneration],
-		SourceType:           sourceType,
+		SourceType:          sourceType,
+		ContentExcerpt:       contentExcerpt(result.Content),
 	}
 	if value, ok := parseIntMetadata(metadata[metadataStartMs]); ok {
 		candidate.StartMs = &value
@@ -117,14 +119,81 @@ func transcriptMetadataFromResult(result *types.SearchResult) (transcriptMetadat
 	// Older VidSage transcript knowledge records stored the complete locator
 	// document in the backend-owned knowledge metadata `content` field while
 	// the indexed chunk body could be split mid-JSON.
+	var parsed transcriptMetadata
+	var ok bool
 	if result.Metadata != nil {
 		if raw := strings.TrimSpace(result.Metadata["content"]); raw != "" {
-			if parsed, ok := parseTranscriptMetadata(raw); ok {
-				return parsed, true
+			if parsed, ok = parseTranscriptMetadata(raw); ok {
+				parsed = fillGenerationFromTitle(parsed, result.KnowledgeTitle)
+				if validTranscriptMetadata(parsed) {
+					return parsed, true
+				}
 			}
 		}
 	}
-	return parseTranscriptMetadata(result.Content)
+	if parsed, ok = parseTranscriptMetadata(result.Content); ok {
+		parsed = fillGenerationFromTitle(parsed, result.KnowledgeTitle)
+		if validTranscriptMetadata(parsed) {
+			return parsed, true
+		}
+	}
+	return transcriptMetadata{}, false
+}
+
+// fillGenerationFromTitle recovers the transcript generation hash and video ID
+// from the knowledge title when the chunk body was truncated before those fields.
+// Title format: transcript/<video_id>/<transcript_generation>/<chunk_index>
+func fillGenerationFromTitle(meta transcriptMetadata, title string) transcriptMetadata {
+	parts := strings.Split(strings.TrimSpace(title), "/")
+	if len(parts) >= 4 && parts[0] == "transcript" {
+		if meta.VideoID == "" {
+			meta.VideoID = strings.TrimSpace(parts[1])
+		}
+		if meta.TranscriptGeneration == "" {
+			meta.TranscriptGeneration = strings.TrimSpace(parts[2])
+		}
+	}
+	return meta
+}
+
+// contentExcerpt extracts a display-only verbatim excerpt from a transcript
+// chunk body. Transcript chunks either expose the spoken text under "## 原文"
+// or store it in the locator JSON's chunk_text field; both paths quote spoken
+// wording only, never the protocol metadata. The excerpt is never parsed for
+// identity and never used as a locator.
+var reChunkText = regexp.MustCompile(`"chunk_text"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+
+func contentExcerpt(content string) string {
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return ""
+	}
+	if index := strings.Index(text, "## 原文"); index >= 0 {
+		text = strings.TrimSpace(text[index+len("## 原文"):])
+	} else if spoken := chunkTextFromLocatorJSON(text); spoken != "" {
+		text = spoken
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	runes := []rune(text)
+	if len(runes) > 120 {
+		return string(runes[:120]) + "..."
+	}
+	return text
+}
+
+// chunkTextFromLocatorJSON quotes the spoken line stored in the chunk_text
+// field of a locator-only chunk body. It returns "" when the body has no
+// such field so callers keep their existing text.
+func chunkTextFromLocatorJSON(body string) string {
+	match := reChunkText.FindStringSubmatch(body)
+	if len(match) != 2 {
+		return ""
+	}
+	text := match[1]
+	text = strings.ReplaceAll(text, `\"`, `"`)
+	text = strings.ReplaceAll(text, `\\`, `\`)
+	text = strings.ReplaceAll(text, `\n`, " ")
+	return strings.TrimSpace(text)
 }
 
 func validTranscriptMetadata(parsed transcriptMetadata) bool {
@@ -313,7 +382,8 @@ func EvidenceFromCandidate(candidate Candidate) (Evidence, bool) {
 		StartMs:              *candidate.StartMs,
 		EndMs:                *candidate.EndMs,
 		TranscriptGeneration: strings.TrimSpace(candidate.TranscriptGeneration),
-		SourceType:           firstNonEmpty(candidate.SourceType, SourceTypeTranscript),
+		SourceType:          firstNonEmpty(candidate.SourceType, SourceTypeTranscript),
+		ContentExcerpt:       strings.TrimSpace(candidate.ContentExcerpt),
 	}, true
 }
 
@@ -447,26 +517,89 @@ func parseTranscriptMetadata(content string) (transcriptMetadata, bool) {
 	const section = "## 视频定位信息"
 	const fence = "```json"
 	start := strings.Index(content, section)
-	if start < 0 {
-		return transcriptMetadata{}, false
-	}
-	fenceStart := strings.Index(content[start+len(section):], fence)
-	if fenceStart < 0 {
-		return transcriptMetadata{}, false
-	}
-	fenceStart += start + len(section) + len(fence)
-	fenceEnd := strings.Index(content[fenceStart:], "```")
-	if fenceEnd < 0 {
-		return transcriptMetadata{}, false
+	var jsonText string
+	if start >= 0 {
+		// Case 1: structured locator with the video-positioning header.
+		fenceStart := strings.Index(content[start+len(section):], fence)
+		if fenceStart < 0 {
+			return transcriptMetadata{}, false
+		}
+		fenceStart += start + len(section) + len(fence)
+		fenceEnd := strings.Index(content[fenceStart:], "```")
+		if fenceEnd >= 0 {
+			jsonText = strings.TrimSpace(content[fenceStart : fenceStart+fenceEnd])
+		} else {
+			jsonText = strings.TrimSpace(content[fenceStart:])
+		}
+	} else {
+		// Case 2: chunk body starts with a JSON fence but no header, or is a
+		// raw JSON fragment. Extract whatever portion carries the locator fields.
+		fenceStart := strings.Index(content, fence)
+		if fenceStart >= 0 {
+			fenceStart += len(fence)
+			fenceEnd := strings.Index(content[fenceStart:], "```")
+			if fenceEnd >= 0 {
+				jsonText = strings.TrimSpace(content[fenceStart : fenceStart+fenceEnd])
+			} else {
+				jsonText = strings.TrimSpace(content[fenceStart:])
+			}
+		} else {
+			jsonText = content
+		}
 	}
 	var parsed transcriptMetadata
-	if err := json.Unmarshal([]byte(strings.TrimSpace(content[fenceStart:fenceStart+fenceEnd])), &parsed); err != nil {
-		return transcriptMetadata{}, false
+	if err := json.Unmarshal([]byte(jsonText), &parsed); err == nil && validTranscriptMetadata(parsed) {
+		return parsed, true
 	}
-	if !validTranscriptMetadata(parsed) {
-		return transcriptMetadata{}, false
+	// Fallback: the chunk body was split mid-JSON (typically right before
+	// transcript_generation). Extract the fields that precede the truncation
+	// point using regex so evidence linkage still works. video_id and
+	// transcript_generation may be absent here; the caller recovers them from
+	// the knowledge title.
+	partial := extractTranscriptMetadataPartial(jsonText)
+	if partial.EvidenceSentenceID != "" && partial.StartMs >= 0 && partial.EndMs > partial.StartMs {
+		return partial, true
 	}
-	return parsed, true
+	return transcriptMetadata{}, false
+}
+
+var (
+	reEvidenceID     = regexp.MustCompile(`"evidence_sentence_id"\s*:\s*"([^"]*)"`)
+	reEvidenceIDs    = regexp.MustCompile(`"evidence_sentence_ids"\s*:\s*\[\s*"([^"]*)"`)
+	reVideoID        = regexp.MustCompile(`"video_id"\s*:\s*"([^"]*)"`)
+	reVideoTitle     = regexp.MustCompile(`"video_title"\s*:\s*"([^"]*)"`)
+	reStartMs        = regexp.MustCompile(`"start_ms"\s*:\s*(\d+)`)
+	reEndMs          = regexp.MustCompile(`"end_ms"\s*:\s*(\d+)`)
+	reGeneration     = regexp.MustCompile(`"transcript_generation"\s*:\s*"([^"]*)"`)
+)
+
+func extractTranscriptMetadataPartial(jsonText string) transcriptMetadata {
+	var meta transcriptMetadata
+	if m := reEvidenceID.FindStringSubmatch(jsonText); len(m) > 1 {
+		meta.EvidenceSentenceID = m[1]
+	} else if m := reEvidenceIDs.FindStringSubmatch(jsonText); len(m) > 1 {
+		meta.EvidenceSentenceID = m[1]
+	}
+	if m := reVideoID.FindStringSubmatch(jsonText); len(m) > 1 {
+		meta.VideoID = m[1]
+	}
+	if m := reVideoTitle.FindStringSubmatch(jsonText); len(m) > 1 {
+		meta.VideoTitle = m[1]
+	}
+	if m := reStartMs.FindStringSubmatch(jsonText); len(m) > 1 {
+		if v, err := strconv.Atoi(m[1]); err == nil {
+			meta.StartMs = v
+		}
+	}
+	if m := reEndMs.FindStringSubmatch(jsonText); len(m) > 1 {
+		if v, err := strconv.Atoi(m[1]); err == nil {
+			meta.EndMs = v
+		}
+	}
+	if m := reGeneration.FindStringSubmatch(jsonText); len(m) > 1 {
+		meta.TranscriptGeneration = m[1]
+	}
+	return meta
 }
 
 func parseIntMetadata(value string) (int, bool) {

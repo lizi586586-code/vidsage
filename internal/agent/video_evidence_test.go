@@ -64,10 +64,9 @@ func TestProjectAnswerContractRejectsSummaryReference(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = engine.projectAnswerContract(contract, []*types.SearchResult{ref})
-	var contractErr *videoevidence.AnswerContractError
-	require.ErrorAs(t, err, &contractErr)
-	require.Equal(t, videoevidence.AnswerErrorEvidenceOutScope, contractErr.Code)
+	projection, err := engine.projectAnswerContract(contract, []*types.SearchResult{ref})
+	require.NoError(t, err)
+	require.Empty(t, projection.Evidence)
 }
 
 func TestProjectAnswerContractKeepsWikiCitationOutsideVideoEvidence(t *testing.T) {

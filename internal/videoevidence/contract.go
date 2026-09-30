@@ -88,6 +88,9 @@ type Evidence struct {
 	TranscriptGeneration string `json:"transcript_generation"`
 	SourceType           string `json:"source_type"`
 	Linkable             bool   `json:"linkable"`
+	// ContentExcerpt is a display-only verbatim excerpt of the transcript
+	// chunk. It is never parsed for identity and never trusted as a locator.
+	ContentExcerpt string `json:"content_excerpt,omitempty"`
 }
 
 // Candidate is an adapter-facing shape. The validator may discard all
@@ -103,6 +106,8 @@ type Candidate struct {
 	EndMs                *int   `json:"end_ms,omitempty"`
 	TranscriptGeneration string `json:"transcript_generation,omitempty"`
 	SourceType           string `json:"source_type,omitempty"`
+	// ContentExcerpt mirrors the display-only excerpt on Evidence.
+	ContentExcerpt string `json:"content_excerpt,omitempty"`
 }
 
 // Scope is the immutable whitelist for one retrieval/request context.

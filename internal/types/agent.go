@@ -265,13 +265,18 @@ func (s *AgentStep) GetObservations() []string {
 
 // AgentState tracks the execution state of an agent across iterations
 type AgentState struct {
-	CurrentRound            int             `json:"current_round"` // Current round number
-	RoundSteps              []AgentStep     `json:"round_steps"`   // All steps taken so far in the current round
-	IsComplete              bool            `json:"is_complete"`   // Whether agent has finished
-	FinalAnswer             string          `json:"final_answer"`  // The final answer to the query
-	CompletionStatus        string          `json:"completion_status,omitempty"`
-	CompletionFailureReason string          `json:"completion_failure_reason,omitempty"`
-	KnowledgeRefs           []*SearchResult `json:"knowledge_refs"` // Collected knowledge references
+	CurrentRound            int               `json:"current_round"` // Current round number
+	RoundSteps              []AgentStep       `json:"round_steps"`   // All steps taken so far in the current round
+	IsComplete              bool              `json:"is_complete"`   // Whether agent has finished
+	FinalAnswer             string            `json:"final_answer"`  // The final answer to the query
+	CompletionStatus        string            `json:"completion_status,omitempty"`
+	CompletionFailureReason string            `json:"completion_failure_reason,omitempty"`
+	KnowledgeRefs           []*SearchResult   `json:"knowledge_refs"` // Collected knowledge references
+	RequiredKnowledgeIDs    []string          `json:"required_knowledge_ids,omitempty"`
+	CandidateSearchStatus   map[string]string `json:"candidate_search_status,omitempty"`
+	// CandidateManifestRetries bounds the correction attempts for one
+	// malformed candidate manifest before the phase fails.
+	CandidateManifestRetries int `json:"candidate_manifest_retries,omitempty"`
 }
 
 // FunctionDefinition represents a function definition for LLM function calling

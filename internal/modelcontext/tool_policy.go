@@ -59,7 +59,9 @@ type toolHandlePolicy struct {
 // name with unrelated semantics and must remain opaque.
 var toolHandlePolicies = map[string]toolHandlePolicy{
 	"knowledge_search": {
-		sourceIDKeys: map[string]struct{}{"knowledge_base_ids": {}},
+		// knowledge_ids accepts model-visible dN handles scoped to whole
+		// documents; decode them back to durable IDs before the tool executes.
+		sourceIDKeys: map[string]struct{}{"knowledge_base_ids": {}, "knowledge_ids": {}},
 		sourceOutput: true,
 	},
 	"grep_chunks": {

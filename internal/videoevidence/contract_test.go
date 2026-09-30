@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Tencent/WeKnora/internal/types"
@@ -214,7 +215,7 @@ func TestValidateComparisonAnswerRequiresLocationTableAfterThreeLocations(t *tes
 	require.NoError(t, ValidateComparisonAnswer("请定位相关内容", contract, projection))
 }
 
-func TestProjectAnswerContractRepairsMissingVideoLocationTableWithoutModelRetry(t *testing.T) {
+func TestProjectAnswerContractRepairsMissingVideoLocationTableDeterministically(t *testing.T) {
 	contract := AnswerContract{
 		SchemaVersion:   AnswerContractVersion,
 		Mode:            AnswerModeReasoning,
@@ -228,17 +229,60 @@ func TestProjectAnswerContractRepairsMissingVideoLocationTableWithoutModelRetry(
 		},
 	}
 	handles := map[string]Evidence{
-		"c1": {EvidenceSentenceID: "e1", VideoID: "v1", SourceType: SourceTypeTranscript, Linkable: true},
-		"c2": {EvidenceSentenceID: "e2", VideoID: "v1", SourceType: SourceTypeTranscript, Linkable: true},
-		"c3": {EvidenceSentenceID: "e3", VideoID: "v2", SourceType: SourceTypeTranscript, Linkable: true},
-		"c4": {EvidenceSentenceID: "e4", VideoID: "v2", SourceType: SourceTypeTranscript, Linkable: true},
+		"c1": {EvidenceSentenceID: "e1", VideoID: "v1", SourceType: SourceTypeTranscript, Linkable: true, ContentExcerpt: "角色加任务加要求加格式"},
+		"c2": {EvidenceSentenceID: "e2", VideoID: "v1", SourceType: SourceTypeTranscript, Linkable: true, ContentExcerpt: "说清不要什么，给个参考"},
+		"c3": {EvidenceSentenceID: "e3", VideoID: "v2", SourceType: SourceTypeTranscript, Linkable: true, ContentExcerpt: "上下文像一叠有限高度的纸条"},
+		"c4": {EvidenceSentenceID: "e4", VideoID: "v2", SourceType: SourceTypeTranscript, Linkable: true, ContentExcerpt: "新对话不会自动继承旧上下文"},
 	}
 
 	projection, err := ProjectAnswerContract(contract, handles)
 	require.NoError(t, err)
 	require.NoError(t, ValidateComparisonAnswer("两个视频分别在哪里讲的", contract, projection))
-	require.Contains(t, projection.RenderedMarkdown, "| 定位 | 核心主旨 |")
+	require.Contains(t, projection.RenderedMarkdown, "| 时间位置 | 内容 |")
 	require.Contains(t, projection.RenderedMarkdown, `<ref id="c4"/>`)
+}
+
+func TestProjectAnswerContractMergesRepeatedGistsIntoSingleLocationRow(t *testing.T) {
+	contract := AnswerContract{
+		SchemaVersion:   AnswerContractVersion,
+		Mode:            AnswerModeReasoning,
+		Coverage:        AnswerCoverageComplete,
+		ContentMarkdown: "两个视频从不同角度讲了AI使用技巧。",
+		Blocks: []AnswerBlock{
+			{Type: "evidence", Title: "两视频主要观点对比", TextMarkdown: "一个教怎么说，一个讲为什么忘。 <ref id=\"c1\"/> <ref id=\"c2\"/>", EvidenceRefs: []string{"c1", "c2"}},
+			{Type: "evidence", Title: "《AI提示词是什么》核心观点", TextMarkdown: "灯神比喻与万能公式。 <ref id=\"c3\"/> <ref id=\"c4\"/> <ref id=\"c5\"/>", EvidenceRefs: []string{"c3", "c4", "c5"}},
+		},
+	}
+	handles := map[string]Evidence{
+		"c1": {EvidenceSentenceID: "e1", VideoID: "v1", SourceType: SourceTypeTranscript, Linkable: true},
+		"c2": {EvidenceSentenceID: "e2", VideoID: "v2", SourceType: SourceTypeTranscript, Linkable: true},
+		"c3": {EvidenceSentenceID: "e3", VideoID: "v1", SourceType: SourceTypeTranscript, Linkable: true},
+		"c4": {EvidenceSentenceID: "e4", VideoID: "v1", SourceType: SourceTypeTranscript, Linkable: true},
+		"c5": {EvidenceSentenceID: "e5", VideoID: "v1", SourceType: SourceTypeTranscript, Linkable: true},
+	}
+
+	projection, err := ProjectAnswerContract(contract, handles)
+	require.NoError(t, err)
+	require.Contains(t, projection.RenderedMarkdown, "| 时间位置 | 内容 |")
+	for _, ref := range []string{"c1", "c2", "c3", "c4", "c5"} {
+		require.Contains(t, projection.RenderedMarkdown, `<ref id="`+ref+`"/>`)
+	}
+	// 同一块引用的多个时间点必须合并为一行，主旨文本不得按引用次数重复
+	require.Equal(t, 1, strings.Count(projection.RenderedMarkdown, "两视频主要观点对比："))
+	require.Equal(t, 1, strings.Count(projection.RenderedMarkdown, "《AI提示词是什么》核心观点："))
+}
+
+func TestContentExcerptQuotesSpokenTextOnly(t *testing.T) {
+	chunk := "## 视频定位信息\n\n```json\n{\"chunk_index\": 358, \"start_ms\": 2370012, \"end_ms\": 2371580}\n```\n\n## 原文\n\n是理解能力的差异。"
+	require.Equal(t, "是理解能力的差异。", contentExcerpt(chunk))
+	// 只有定位 JSON 的块：摘录取 chunk_text 的话语文本，不显示原始 JSON
+	locatorOnly := "```json\n{\n  \"chunk_index\": 1,\n  \"chunk_text\": \"到底什么是ai提示词？你就把ai想象成一个超级听话但又超级死板的阿拉丁灯神。\",\n  \"end_ms\": 170004\n}\n```"
+	require.Equal(t, "到底什么是ai提示词？你就把ai想象成一个超级听话但又超级死板的阿拉丁灯神。", contentExcerpt(locatorOnly))
+	require.Equal(t, "", contentExcerpt("   "))
+	// 超长原文截断到 120 字符
+	long := strings.Repeat("长", 200)
+	excerpt := contentExcerpt("## 原文\n\n" + long)
+	require.Len(t, []rune(excerpt), 123) // 120 + "..."
 }
 
 func TestNormalizeCandidateClassifiesStableFailures(t *testing.T) {

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"regexp"
 	"strings"
 )
@@ -55,6 +57,9 @@ type AnswerProjection struct {
 
 type AnswerContractError struct {
 	Code AnswerErrorCode
+	// Detail is a sanitized parse reason (no raw model output). It is used
+	// for diagnostics only and never replaces the stable error code.
+	Detail string
 }
 
 type AnswerErrorCode string
@@ -73,6 +78,9 @@ const (
 func (e *AnswerContractError) Error() string {
 	if e == nil {
 		return ""
+	}
+	if e.Detail != "" {
+		return string(e.Code) + ": " + e.Detail
 	}
 	return string(e.Code)
 }
@@ -100,11 +108,46 @@ func unwrapJSONCodeFence(raw string) string {
 	return strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
 }
 
+// jsonErrorWindow returns a bounded excerpt around the failing byte offset so
+// diagnostics can locate the malformation without logging the whole answer.
+func jsonErrorWindow(body string, offset int) string {
+	if offset < 0 || offset >= len(body) {
+		return ""
+	}
+	start := offset - 40
+	if start < 0 {
+		start = 0
+	}
+	end := offset + 40
+	if end > len(body) {
+		end = len(body)
+	}
+	return strings.Join(strings.Fields(body[start:end]), " ")
+}
+
+// trimLeadingPreamble drops the process narration some models emit before
+// the JSON object ("已收集到足够证据。现在开始作答…" / "I have all the
+// evidence needed. Let me write…"). Only text before the first object start
+// is skipped; anything after the object remains subject to the strict
+// trailing-content check, and bodies without a JSON object still fail.
+func trimLeadingPreamble(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" || strings.HasPrefix(trimmed, "{") {
+		return trimmed
+	}
+	index := strings.Index(trimmed, "{")
+	if index < 0 {
+		return trimmed
+	}
+	return strings.TrimSpace(trimmed[index:])
+}
+
 // ParseAnswerContract strictly decodes one answer_contract/v1 object. A
-// single Markdown JSON fence is tolerated as a transport wrapper, but all
-// contract and trailing-content checks remain strict.
+// single Markdown JSON fence and a leading process narration are tolerated
+// as transport wrappers, but all contract and trailing-content checks
+// remain strict.
 func ParseAnswerContract(raw string) (AnswerContract, error) {
-	trimmed := unwrapJSONCodeFence(raw)
+	trimmed := trimLeadingPreamble(unwrapJSONCodeFence(raw))
 	if trimmed == "" {
 		return AnswerContract{}, &AnswerContractError{Code: AnswerErrorInvalidJSON}
 	}
@@ -122,10 +165,14 @@ func ParseAnswerContract(raw string) (AnswerContract, error) {
 		if errors.Is(err, io.ErrUnexpectedEOF) {
 			return AnswerContract{}, &AnswerContractError{Code: AnswerErrorTruncatedOutput}
 		}
-		if strings.Contains(err.Error(), "unknown field") {
-			return AnswerContract{}, &AnswerContractError{Code: AnswerErrorUnknownField}
+		detail := err.Error()
+		if syntax, ok := err.(*json.SyntaxError); ok {
+			detail = fmt.Sprintf("%s near %q", detail, jsonErrorWindow(trimmed, int(syntax.Offset)))
 		}
-		return AnswerContract{}, &AnswerContractError{Code: AnswerErrorInvalidJSON}
+		if strings.Contains(detail, "unknown field") {
+			return AnswerContract{}, &AnswerContractError{Code: AnswerErrorUnknownField, Detail: detail}
+		}
+		return AnswerContract{}, &AnswerContractError{Code: AnswerErrorInvalidJSON, Detail: detail}
 	}
 	var trailing interface{}
 	if err := decoder.Decode(&trailing); err != io.EOF {
@@ -318,18 +365,18 @@ func ProjectAnswerContractWithOrdinaryHandles(
 		Evidence:         make([]Evidence, 0),
 	}
 	seen := make(map[string]struct{})
-	invalid := false
+	skippedOutOfScope := 0
 	for _, block := range contract.Blocks {
 		for _, rawHandle := range block.EvidenceRefs {
 			handle := strings.TrimSpace(rawHandle)
 			evidence, videoOK := handles[handle]
 			if videoOK {
 				if !evidence.Linkable || evidence.SourceType == SourceTypeWiki {
-					invalid = true
+					skippedOutOfScope++
 					continue
 				}
 			} else if _, ordinaryOK := ordinaryHandles[handle]; !ordinaryOK {
-				invalid = true
+				skippedOutOfScope++
 				continue
 			} else {
 				continue
@@ -341,8 +388,9 @@ func ProjectAnswerContractWithOrdinaryHandles(
 			projection.Evidence = append(projection.Evidence, evidence)
 		}
 	}
-	if invalid {
-		return AnswerProjection{}, &AnswerContractError{Code: AnswerErrorEvidenceOutScope}
+	if skippedOutOfScope > 0 {
+		log.Printf("[Projection] skipped %d out-of-scope evidence handle(s); projected valid evidence=%d",
+			skippedOutOfScope, len(projection.Evidence))
 	}
 	switch {
 	case len(projection.Evidence) == 0:

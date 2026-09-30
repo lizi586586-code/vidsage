@@ -48,6 +48,9 @@ func (e *AgentEngine) streamFinalAnswerToEventBus(
 	state *types.AgentState,
 	sessionID string,
 ) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	totalToolCalls := countTotalToolCalls(state.RoundSteps)
 	logger.Infof(ctx, "[Agent][FinalAnswer] Synthesizing from %d steps, %d tool calls",
 		len(state.RoundSteps), totalToolCalls)
@@ -100,7 +103,7 @@ func (e *AgentEngine) streamFinalAnswerToEventBus(
 8. Return exactly one JSON object that conforms to %s. Do not use Markdown fences, explanations, or trailing text.
 9. The object must contain: schema_version (exactly %q), mode (exactly %q for this agent), coverage (%q, %q, or %q), content_markdown (string), and blocks (array).
 10. Each block must contain only type, title, text_markdown, and evidence_refs. Block type must be exactly one of "summary", "topic", "comparison", "steps", or "evidence"; never use "video_evidence" or "answer". Use evidence_refs only for citation handles that appear in the block text as <ref id="cN"/>. Ordinary knowledge/Wiki cN handles may be cited for explanation, but they remain normal sources and never become video evidence; video locations require a validated transcript handle. Do not invent video IDs, titles, timestamps, evidence IDs, or links.
-11. Every video location must be written as a complete sentence around its citation. If the answer contains more than 3 validated video locations, use a Markdown table with exactly the headers "定位" and "核心主旨"; put one complete location sentence and its <ref id="cN"/> in each location row. Do not write video titles beside citations; the client renders only the validated time range.`, videoevidence.AnswerContractVersion,
+11. Every video location must be written as a complete sentence around its citation. Do not output a Markdown table of video locations yourself and never hand-write times, video IDs, or evidence IDs; the system appends the validated location table and renders only the validated time range.`, videoevidence.AnswerContractVersion,
 				videoevidence.AnswerContractVersion, videoevidence.AnswerModeReasoning,
 				videoevidence.AnswerCoverageComplete, videoevidence.AnswerCoveragePartial, videoevidence.AnswerCoverageNone)
 		}
@@ -188,6 +191,9 @@ Now generate the final answer:`, query, imageRequirement, answerContractRequirem
 			})
 			return err
 		}
+		if err := candidateAnswerCoverageError(state, contract.Coverage); err != nil {
+			return err
+		}
 		projection, err := e.projectAnswerContract(contract, state.KnowledgeRefs)
 		if err != nil {
 			logger.Errorf(ctx, "[Agent][FinalAnswer] Answer evidence projection failed: %v", err)
@@ -197,7 +203,9 @@ Now generate the final answer:`, query, imageRequirement, answerContractRequirem
 			})
 			return err
 		}
-		if err := videoevidence.ValidateComparisonAnswer(query, contract, projection); err != nil {
+		if err := videoevidence.ValidateComparisonAnswerForKnowledgeIDs(
+			query, contract, projection, state.RequiredKnowledgeIDs,
+		); err != nil {
 			logger.Errorf(ctx, "[Agent][FinalAnswer] Comparison answer validation failed: %v", err)
 			common.PipelineError(ctx, "Agent", "answer_contract_invalid", map[string]interface{}{
 				"session_id": sessionID,

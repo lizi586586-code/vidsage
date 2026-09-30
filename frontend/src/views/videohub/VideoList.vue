@@ -1,25 +1,25 @@
 <template>
   <main class="video-list-page">
     <header class="video-list-page__header">
-      <div><h1>Home</h1><p class="video-list-page__description">Explore the knowledge within your videos.</p></div>
+      <div><h1>Course</h1></div>
       <div class="video-list-page__actions">
-        <t-input v-model="query" class="video-list-page__search" clearable placeholder="搜索视频">
+        <t-input v-model="query" class="video-list-page__search" clearable placeholder="搜索课程">
           <template #prefix-icon><t-icon name="search" /></template>
         </t-input>
         <t-button class="video-list-page__upload" @click="openUpload">
           <template #icon><t-icon name="upload" /></template>
-          上传视频
+          上传课程
         </t-button>
       </div>
     </header>
     <t-alert v-if="refreshError" theme="warning" :message="refreshError" class="video-list-page__alert" />
-    <div v-if="loading" class="video-list-page__state"><t-loading text="正在加载视频" /></div>
-    <t-empty v-else-if="filteredVideos.length === 0" :description="query ? '没有匹配的视频' : '还没有视频，上传第一个视频吧'">
-      <template #action><t-button v-if="!query" class="video-list-page__upload" @click="openUpload"><template #icon><t-icon name="upload" /></template>上传视频</t-button></template>
+    <div v-if="loading" class="video-list-page__state"><t-loading text="正在加载课程" /></div>
+    <t-empty v-else-if="filteredVideos.length === 0" :description="query ? '没有匹配的课程' : '还没有课程，上传第一门课程吧'">
+      <template #action><t-button v-if="!query" class="video-list-page__upload" @click="openUpload"><template #icon><t-icon name="upload" /></template>上传课程</t-button></template>
     </t-empty>
     <template v-else>
       <div class="video-list-page__summary">
-        <span><strong>全部视频</strong><span aria-hidden="true"> · </span>{{ filteredVideos.length }} 个</span>
+        <span><strong>全部课程</strong><span aria-hidden="true"> · </span>{{ filteredVideos.length }} 个</span>
       </div>
       <section class="video-list-page__grid">
       <VideoCard

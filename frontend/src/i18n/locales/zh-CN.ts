@@ -6365,7 +6365,7 @@ export default {
   videohub: {
     agentPicker: {
       title: '智能体',
-      autoRoute: '自动路由',
+      autoRoute: '自动',
       quickAnswer: '快速问答',
       customAgent: '自定义推理',
       fetchFailed: '智能体信息加载失败，已显示默认名称'

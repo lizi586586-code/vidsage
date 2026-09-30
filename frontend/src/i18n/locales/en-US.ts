@@ -6363,7 +6363,7 @@ export default {
   videohub: {
     agentPicker: {
       title: 'Agent',
-      autoRoute: 'Auto route',
+      autoRoute: 'Auto',
       quickAnswer: 'Quick Answer',
       customAgent: 'Custom Reasoning',
       fetchFailed: 'Agent info load failed, showing default name'

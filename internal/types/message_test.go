@@ -7,6 +7,43 @@ import (
 	"time"
 )
 
+func TestMessageJSONExposesOnlyNonSecretRequestContext(t *testing.T) {
+	message := Message{
+		ID:        "assistant-1",
+		SessionID: "session-1",
+		RequestID: "request-1",
+		Role:      "assistant",
+		Content:   "answer",
+		ExecutionContext: MessageExecutionContext{
+			KnowledgeBaseIDs: []string{"video-kb"},
+			ExecutionScope:   "global_videos",
+			AgentEnabled:     false,
+			AutoRoute:        true,
+			DisableTitle:     true,
+		},
+		RenderedContent: "private model input",
+	}
+
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	context, ok := payload["request_context"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_context = %#v, want object", payload["request_context"])
+	}
+	if context["execution_scope"] != "global_videos" || context["auto_route"] != true {
+		t.Fatalf("request_context = %#v", context)
+	}
+	if _, exposed := payload["rendered_content"]; exposed {
+		t.Fatal("rendered_content must remain hidden")
+	}
+}
+
 // TestMessageArtifacts_ValueScanRoundTrip pins the JSONB serialisation
 // contract used by GORM: (Value → bytes → Scan) must produce an equivalent
 // slice, including a zero-time modified-at (which must survive JSON's

@@ -510,7 +510,7 @@
   }
 
   :deep(.chat-markdown-table) {
-    width: fit-content;
+    width: 100%;
     max-width: 100%;
     margin: 0.875em 0 1em;
     overflow-x: auto;
@@ -521,13 +521,14 @@
   }
 
   :deep(table) {
-    word-break: initial;
+    word-break: break-word;
     border-collapse: separate;
     border-spacing: 0;
     display: table;
     font-size: 14px;
     line-height: 1.55;
-    width: max-content;
+    width: 100%;
+    table-layout: fixed;
     min-width: 0;
   }
 

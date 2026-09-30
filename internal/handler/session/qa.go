@@ -173,6 +173,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		logger.Error(ctx, "Query content is empty")
 		return nil, nil, errors.NewBadRequestError("Query content cannot be empty")
 	}
+	requestSnapshot := request
 
 	// Resolve the storage-reference representation up front: once the SSE stream
 	// has started an invalid value can no longer be reported as a 400.
@@ -223,11 +224,8 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		return nil, nil, err
 	}
 
-	// Auto-routing is only entered when no agent was explicitly selected. A
-	// user-selected quick-answer or custom/shared agent must retain its own
-	// behavior, even if a stale client also sends auto_route=true. The
-	// original agent ID is used for signed content-pipeline validation below;
-	// the resolved ID is only the execution target for this turn.
+	// Auto-routing only applies when requested and no agent was explicitly
+	// selected. Preserve explicit quick-answer and custom/shared selections.
 	provenanceAgentID := request.AgentID
 	routeInfo := routeMetadata{
 		AutoRoute:            false,
@@ -443,6 +441,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		secutils.SanitizeForLogArray(skillNames),
 		request.WebSearchEnabled,
 	)
+	applyMessageRequestSnapshot(&executionContext, requestSnapshot)
 
 	productionIdentity, provenanceErr := productionIdentityFromSignedRequest(
 		ctx,
@@ -649,6 +648,16 @@ func buildMessageExecutionContext(
 	}
 
 	return snapshot, agent.ID, agentTenantID, modelID
+}
+
+func applyMessageRequestSnapshot(snapshot *types.MessageExecutionContext, request CreateKnowledgeQARequest) {
+	snapshot.ExecutionScope = request.ExecutionScope
+	snapshot.AgentEnabled = request.AgentEnabled
+	snapshot.AutoRoute = request.AutoRoute
+	snapshot.RequestedAgentID = request.AgentID
+	snapshot.AgentSourceTenantID = request.AgentSourceTenantID
+	snapshot.RequestedSummaryModel = request.SummaryModelID
+	snapshot.DisableTitle = request.DisableTitle
 }
 
 func cloneTagScopes(scopes []types.TagScope) []types.TagScope {

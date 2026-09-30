@@ -179,30 +179,30 @@ func (t *ListKnowledgeChunksTool) Execute(ctx context.Context, args json.RawMess
 	totalChunks := total
 	fetched := len(chunks)
 
-	// Explicit out-of-range guidance: when the caller paged past the end
-	// (offset >= total with total > 0), silently returning fetched=0 is
-	// confusing for LLMs that just saw the document in search results. Tell
-	// them exactly what happened and what offset would be valid so the next
-	// call lands on a real page.
+	// When the caller paged past the end (offset >= total with total > 0),
+	// recover the final page locally. Returning a paging error here can make a
+	// valid document look unavailable and truncate the model's final answer.
 	if fetched == 0 && totalChunks > 0 && int64(offset) >= totalChunks {
-		suggestedOffset := totalChunks - int64(chunkLimit)
-		if suggestedOffset < 0 {
-			suggestedOffset = 0
+		// Models occasionally request the next page after a document's final
+		// page. Recover locally so a valid document is not reported as a failed
+		// retrieval and the final answer is not truncated by a paging error.
+		pagination.Page = int((totalChunks-1)/int64(chunkLimit)) + 1
+		chunks, total, err = t.chunkService.GetRepository().ListPagedChunksByKnowledgeID(ctx,
+			effectiveTenantID, knowledgeID, pagination, []types.ChunkType{types.ChunkTypeText, types.ChunkTypeFAQ}, nil, "", "", "", "", &enabled)
+		if err != nil {
+			return &types.ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("failed to list chunks: %v", err),
+			}, err
 		}
-		return &types.ToolResult{
-			Success: false,
-			Error: fmt.Sprintf(
-				"offset %d is out of range: document has only %d chunks (valid offset range: 0..%d). Retry with offset=%d (or any value < %d).",
-				offset, totalChunks, totalChunks-1, suggestedOffset, totalChunks,
-			),
-			Data: map[string]interface{}{
-				"knowledge_id":     knowledgeID,
-				"total_chunks":     totalChunks,
-				"requested_offset": offset,
-				"requested_limit":  chunkLimit,
-				"suggested_offset": suggestedOffset,
-			},
-		}, nil
+		if chunks == nil {
+			return &types.ToolResult{
+				Success: false,
+				Error:   "chunk query returned no data",
+			}, fmt.Errorf("chunk query returned no data")
+		}
+		totalChunks = total
+		fetched = len(chunks)
 	}
 
 	// Enrich image info from child image chunks (lazy loading)

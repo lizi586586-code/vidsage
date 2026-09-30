@@ -336,10 +336,6 @@
                   :title="$t('agent.copy')">
                   <t-icon name="copy" />
                 </t-button>
-                <t-button size="small" variant="outline" shape="round" @click.stop="handleAddToKnowledge(event)"
-                  :title="$t('agent.addToKnowledgeBase')">
-                  <t-icon name="bookmark-add" />
-                </t-button>
                 <!-- Skill artifact download: only shown when the persisted
                      assistant message recorded any generated files. Agent
                      mode is the primary path for skills, so this is where
@@ -558,7 +554,6 @@ import type { KnowledgeReferenceLike, ReferenceHighlightTarget } from '@/utils/r
 import { resolveCitationChunkId } from '@/utils/citationMarkdown';
 import { getWikiPage, type WikiPage } from '@/api/wiki';
 import { MessagePlugin } from 'tdesign-vue-next';
-import { useUIStore } from '@/stores/ui';
 import { useSettingsStore } from '@/stores/settings';
 import { useAuthStore } from '@/stores/auth';
 import { useI18n } from 'vue-i18n';
@@ -570,8 +565,6 @@ import { getAgentToolIconName } from '@/utils/agent-tool-icons';
 import { getQueryText, getWikiPageText, sanitizeThinkingText } from '@/utils/agent-tool-display';
 import { parseWikiToolReferences } from '@/utils/wikiToolReferences';
 import {
-  buildManualMarkdown,
-  formatManualTitle,
   replaceIncompleteMermaidWithPlaceholder,
   prepareStreamingMermaidMarkdown,
   extractFirstMermaidCode,
@@ -597,7 +590,6 @@ const getToolIconName = getAgentToolIconName;
 
 const router = useRouter();
 const route = useRoute();
-const uiStore = useUIStore();
 const settingsStore = useSettingsStore();
 const authStore = useAuthStore();
 const { t } = useI18n();
@@ -2877,26 +2869,6 @@ const handleCopyAnswer = async (answerEvent: any) => {
   await copyWithToast(content, 'agentStream.copy.success', 'agentStream.copy.failed');
 };
 
-const handleAddToKnowledge = (answerEvent: any) => {
-  const content = getActualContent(answerEvent);
-  if (!content) {
-    MessagePlugin.warning(t('agentStream.saveToKb.emptyContent'));
-    return;
-  }
-
-  const question = (props.userQuery || '').trim();
-  const manualContent = buildManualMarkdown(question, content);
-  const manualTitle = formatManualTitle(question);
-
-  uiStore.openManualEditor({
-    mode: 'create',
-    title: manualTitle,
-    content: manualContent,
-    status: 'draft',
-  });
-
-  MessagePlugin.info(t('agentStream.saveToKb.editorOpened'));
-};
 </script>
 
 <style lang="less" scoped>
@@ -3877,30 +3849,26 @@ const handleAddToKnowledge = (answerEvent: any) => {
 }
 
 /* Collapsed in-progress thinking: animate status cues without moving the card. */
-.thinking-collapsed-active .action-name,
-.thinking-collapsed-active .action-summary {
+.action-card.thinking-collapsed-active .action-name,
+.action-card.thinking-collapsed-active .action-summary,
+.action-card.thinking-collapsed-active:hover .action-name,
+.action-card.thinking-collapsed-active:hover .action-summary,
+.action-card.thinking-collapsed-active:focus-within .action-name,
+.action-card.thinking-collapsed-active:focus-within .action-summary {
   color: var(--td-text-color-secondary);
-  background: linear-gradient(100deg, var(--td-text-color-secondary) 0%, var(--td-text-color-secondary) 32%, var(--td-text-color-primary) 50%, var(--td-text-color-secondary) 68%, var(--td-text-color-secondary) 100%);
-  background-size: 300% 100%;
-  background-position: 100% 0;
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: var(--td-text-color-secondary);
-  animation: thinking-collapsed-shimmer 2.2s ease-in-out infinite;
-}
-.thinking-collapsed-active:hover .action-name,
-.thinking-collapsed-active:hover .action-summary {
   background: none;
-  color: var(--td-text-color-primary);
   -webkit-text-fill-color: currentColor;
-  animation: none;
+  animation: thinking-collapsed-status 2.2s ease-in-out infinite;
 }
 .thinking-collapsed-active .action-title-icon { animation: thinking-collapsed-status 2.2s ease-in-out infinite; }
-@keyframes thinking-collapsed-shimmer { 0% { background-position: 100% 0; } 82%, 100% { background-position: 0 0; } }
 @keyframes thinking-collapsed-status { 0%, 82%, 100% { opacity: 0.58; } 42% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .thinking-collapsed-active .action-name,
-  .thinking-collapsed-active .action-summary { color: var(--td-text-color-secondary); background: none; -webkit-text-fill-color: currentColor; animation: none; }
+  .action-card.thinking-collapsed-active .action-name,
+  .action-card.thinking-collapsed-active .action-summary,
+  .action-card.thinking-collapsed-active:hover .action-name,
+  .action-card.thinking-collapsed-active:hover .action-summary,
+  .action-card.thinking-collapsed-active:focus-within .action-name,
+  .action-card.thinking-collapsed-active:focus-within .action-summary { animation: none; }
   .thinking-collapsed-active .action-title-icon { animation: none; }
 }
 

@@ -44,6 +44,7 @@ export type CitationKnowledgeRef = {
   knowledge_id?: string
   knowledge_title?: string
   knowledge_filename?: string
+  content?: string
   chunk_index?: number
   chunk_type?: string
   knowledge_base_id?: string
@@ -54,6 +55,8 @@ export type CitationKnowledgeRef = {
 
 export type CitationDisplayOptions = {
   showVideoTitle?: boolean
+  /** Hide citations that have no validated, openable detail target. */
+  hideUnavailableCitations?: boolean
 }
 
 const VIDEO_TITLE_REQUIRED_RE = /哪个视频|哪些视频|分别(?:在哪个|是哪个)?视频|分别|各个视频|各视频|两个视频|多视频|跨视频|视频之间|哪条视频|视频名称|来源视频/
@@ -243,6 +246,7 @@ export function preprocessCitationTags(
         return ref.video_evidence_unavailable && (ids.includes(rawChunkId) || ids.includes(chunkId))
       })
       if (unresolvedVideoSource) {
+        if (options.hideUnavailableCitations) return ''
         return `<span class="citation citation-kb citation-kb--plain"><span class="citation-icon citation-icon--book" aria-hidden="true"></span><span class="citation-text">${displayDoc}</span></span>`
       }
       const wikiFallback = findWikiFallback(rawChunkId, chunkId, refs)
@@ -252,6 +256,14 @@ export function preprocessCitationTags(
         const safeWikiSlug = escapeHtml(wikiFallback.slug)
         const safeWikiTitle = escapeHtml(wikiFallback.title || doc)
         return `<span class="citation citation-wiki-fallback" data-wiki-kb-id="${safeWikiKBID}" data-wiki-page-id="${safeWikiPageID}" data-wiki-slug="${safeWikiSlug}" data-doc="${safeWikiTitle}" role="button" tabindex="0"><span class="citation-icon citation-icon--book" aria-hidden="true"></span><span class="citation-text">${safeWikiTitle}</span></span>`
+      }
+      if (options.hideUnavailableCitations) {
+        const matchingReference = findReference(rawChunkId, chunkId, refs)
+        // Only references with a readable payload can open the detail drawer.
+        // A title-only reference is metadata, not a usable answer source, and
+        // must disappear instead of falling through to the knowledge-base list.
+        if (!matchingReference?.content?.trim()) return ''
+        if (matchingReference.video_evidence_unavailable) return ''
       }
       return `<span class="citation citation-kb" data-kb-id="${safeKbId}" data-chunk-id="${safeChunkId}" data-doc="${safeDoc}" role="button" tabindex="0"><span class="citation-icon citation-icon--book" aria-hidden="true"></span><span class="citation-text">${displayDoc}</span><span class="citation-tip"><span class="tip-loading">…</span></span></span>`
     })
@@ -285,6 +297,23 @@ function findVideoEvidence(
     ].map((value) => String(value || '').trim()).filter(Boolean)
     return ids.includes(raw) || ids.includes(resolved)
   })?.video_evidence
+}
+
+function findReference(
+  rawChunkId: string,
+  resolvedChunkId: string,
+  refs?: CitationKnowledgeRef[] | null,
+): CitationKnowledgeRef | undefined {
+  const raw = String(rawChunkId || '').trim()
+  const resolved = String(resolvedChunkId || '').trim()
+  return (refs || []).find((ref) => {
+    const ids = [
+      ref.id,
+      ref.knowledge_id,
+      ...(Array.isArray(ref.chunk_ids) ? ref.chunk_ids : []),
+    ].map((value) => String(value || '').trim()).filter(Boolean)
+    return ids.includes(raw) || ids.includes(resolved)
+  })
 }
 
 function findWikiFallback(

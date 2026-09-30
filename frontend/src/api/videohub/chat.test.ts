@@ -6,6 +6,7 @@ import {
   displayQuestionFromStoredContent,
   dedupeNativeAnswerEvents,
   failureMessageForReason,
+  finalizeStoppedAgentEvents,
   mergeLocalTurnWithStoredMessages,
   parseWeKnoraStreamChunk,
   shouldAbortStream,
@@ -49,6 +50,20 @@ test('deduplicates repeated native answer events emitted at stream completion', 
     { type: 'answer', event_id: 'terminal-answer', content: 'AI 会受上下文窗口限制而失忆。', done: true },
     { type: 'agent_complete' },
   ])
+})
+
+test('keeps partial generated content and marks the native stream stopped', () => {
+  assert.deepEqual(
+    finalizeStoppedAgentEvents(
+      [{ type: 'thinking', content: '先读取视频知识' }, { type: 'answer', content: '已生成', done: false }],
+      '已生成的部分回答',
+    ),
+    [
+      { type: 'thinking', content: '先读取视频知识' },
+      { type: 'answer', content: '已生成的部分回答', done: true },
+      { type: 'stop', reason: 'user_requested', done: true },
+    ],
+  )
 })
 
 test('appends the streamed assistant answer after the stored current user message', () => {

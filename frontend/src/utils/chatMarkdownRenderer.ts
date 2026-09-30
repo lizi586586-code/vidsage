@@ -42,6 +42,8 @@ export type RenderChatMarkdownOptions = {
   knowledgeReferences?: CitationKnowledgeRef[] | null
   /** Hide video titles when the question context already identifies one source. */
   showVideoTitle?: boolean
+  /** Suppress source tags that have no usable detail target. */
+  hideUnavailableCitations?: boolean
   cachedMermaidSvgHtml?: string | null
   injectCachedMermaidSvg?: (html: string, cachedSvgHtml?: string | null) => string
   prepareMarkdown?: (markdown: string, cachedSvgHtml?: string | null) => string
@@ -488,6 +490,7 @@ export function renderChatMarkdown(rawMarkdown: unknown, options: RenderChatMark
   const { content: markdownWithPlaceholders, htmlSnippets } =
     extractCitationHtmlPlaceholders(flankingSafeMarkdown, options.knowledgeReferences, {
       showVideoTitle: options.showVideoTitle,
+      hideUnavailableCitations: options.hideUnavailableCitations,
     })
   const escapedMarkdown = options.escapeMarkdown(markdownWithPlaceholders)
   const html = marked.parse(markdownWithPlaceholders, {

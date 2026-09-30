@@ -6,7 +6,7 @@
       :aria-label="t('videohub.agentPicker.title')"
       @click.stop="toggleDropdown"
     >
-      <t-icon :name="props.appearance === 'tool' ? 'map-route-planning' : 'precise-search'" />
+      <t-icon v-if="props.appearance !== 'tool'" name="precise-search" />
       <span class="picker-chip__label">{{ props.appearance === 'tool' && !currentAgentId ? (props.toolLabel || currentAgentName) : currentAgentName }}</span>
       <t-icon v-if="props.appearance !== 'tool'" name="chevron-down" :class="{ 'picker-chip__icon--open': dropdownVisible }" />
     </button>
@@ -206,8 +206,12 @@ function onSelect(agent: DisplayAgent) {
 }
 
 .picker-chip--tool:hover {
-  color: var(--td-text-color-primary);
-  background: rgba(0, 0, 0, .06);
+  background: transparent;
+  color: var(--td-brand-color);
+}
+
+.picker-chip--tool:focus-visible {
+  color: var(--td-brand-color);
 }
 
 .picker-chip--tool :deep(.t-icon) {

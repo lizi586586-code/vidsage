@@ -299,6 +299,11 @@ export interface ChatMessage {
   route_mode?: 'quick' | 'reasoning'
   coverage?: 'complete' | 'partial' | 'none'
   video_evidence?: VideoEvidence[]
+  request_id?: string
+  assistant_message_id?: string
+  is_completed?: boolean
+  content?: string
+  debugRequest?: import('@/utils/chatRequestDebug').ChatRequestDebugInfo
 }
 
 export interface ChatSession {

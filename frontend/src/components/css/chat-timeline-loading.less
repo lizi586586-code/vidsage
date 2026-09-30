@@ -27,8 +27,10 @@
   // (no-repeat would leave the uncovered area transparent -> invisible text.)
   -webkit-background-clip: text;
   background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  // Keep a real text color as the fallback. Some browsers repaint clipped
+  // gradient text as transparent during hover/compositor updates.
+  -webkit-text-fill-color: var(--td-text-color-placeholder);
+  color: var(--td-text-color-placeholder);
   animation: chatStreamShimmer 1.5s linear infinite;
   // Keep the sweep on its own compositor layer so it stays smooth while the
   // surrounding timeline relayouts on each streamed token.
@@ -40,6 +42,17 @@
 .action-card.action-pending .action-name,
 .action-name.is-running {
   .chat-stream-shimmer-text();
+}
+
+// Hover/focus states must override the gradient fill as well as `color`.
+// Otherwise the label remains invisible after the pointer enters the card.
+.action-card.action-pending:hover .action-name,
+.action-card.action-pending:focus-within .action-name,
+.action-name.is-running:hover {
+  background-image: none;
+  -webkit-text-fill-color: currentColor;
+  color: var(--td-text-color-primary);
+  animation: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

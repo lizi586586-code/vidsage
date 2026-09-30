@@ -21,12 +21,14 @@ test('reference document links open in a new tab', () => {
   )
 })
 
-test('wiki drawer navigation and citation fallbacks open in a new tab', () => {
+test('wiki citations stay in the right-side drawer and unavailable citations never fall back to the KB list', () => {
   assert.match(
     agentStream,
     /:href="wikiGraphHref"[\s\S]*?target="_blank"[\s\S]*?rel="noopener noreferrer"/,
   )
-  assert.match(agentStream, /window\.open\(href, '_blank', 'noopener,noreferrer'\)/)
+  assert.match(agentStream, /openWikiDrawer\(kbId, slug\)/)
+  assert.match(agentStream, /A citation without an openable detail drawer is intentionally inert/)
+  assert.doesNotMatch(agentStream, /router\.push\(\{\s*path:\s*`\/platform\/knowledge-bases/)
   assert.doesNotMatch(agentStream, /router\.push\(/)
 })
 

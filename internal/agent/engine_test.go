@@ -783,3 +783,26 @@ func TestStreamFinalAnswerToEventBus_EmitsDoneWhenProviderEndsWithEmptyChunk(t *
 		"a decoder may hold a short suffix until Done to rule out a split model handle")
 	assert.Equal(t, "final answer", state.FinalAnswer)
 }
+func TestExecuteLoop_MissingVideoCoverageStopsWithoutReusingOldEvidence(t *testing.T) {
+	invalidJSON := `{"schema_version":"answer_contract/v1"`
+	missingCoverage := `{"schema_version":"answer_contract/v1","mode":"reasoning","coverage":"complete","content_markdown":"视频一见 <ref id=\"c1\"/>","blocks":[{"type":"summary","title":"视频一","text_markdown":"视频一见 <ref id=\"c1\"/>","evidence_refs":["c1"]}]}`
+	completeCoverage := `{"schema_version":"answer_contract/v1","mode":"reasoning","coverage":"complete","content_markdown":"视频一见 <ref id=\"c1\"/>，视频二见 <ref id=\"c2\"/>","blocks":[{"type":"summary","title":"视频一","text_markdown":"视频一见 <ref id=\"c1\"/>","evidence_refs":["c1"]},{"type":"summary","title":"视频二","text_markdown":"视频二见 <ref id=\"c2\"/>","evidence_refs":["c2"]}]}`
+	model := &mockChat{responses: []mockResponse{
+		{chunks: []types.StreamResponse{{Content: invalidJSON, Done: true, FinishReason: "stop"}}},
+		{chunks: []types.StreamResponse{{Content: missingCoverage, Done: true, FinishReason: "stop"}}},
+		{chunks: []types.StreamResponse{{Content: completeCoverage, Done: true, FinishReason: "stop"}}},
+	}}
+	engine := newTestEngine(t, model)
+	engine.config.AnswerContractEnabled = true
+	state := &types.AgentState{KnowledgeRefs: []*types.SearchResult{
+		{ID: "chunk-1", ChunkType: types.ChunkTypeText, Metadata: map[string]string{"source_type": "transcript", "evidence_sentence_id": "evs:1", "video_id": "video-1", "video_title": "视频一", "start_ms": "1000", "end_ms": "3000", "transcript_generation": "generation-1"}},
+		{ID: "chunk-2", ChunkType: types.ChunkTypeText, Metadata: map[string]string{"source_type": "transcript", "evidence_sentence_id": "evs:2", "video_id": "video-2", "video_title": "视频二", "start_ms": "4000", "end_ms": "6000", "transcript_generation": "generation-1"}},
+	}}
+
+	_, err := engine.executeLoop(context.Background(), state, "请分别说明两个视频在哪里讲了提示词", emptyMessages(), emptyTools(), "sess-1", "msg-1")
+
+	require.NoError(t, err)
+	require.True(t, state.IsComplete)
+	require.Equal(t, "succeeded", state.CompletionStatus)
+	require.Len(t, model.calls, 3, "missing coverage should trigger a retry to gather more evidence")
+}

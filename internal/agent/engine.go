@@ -139,9 +139,12 @@ func (e *AgentEngine) buildSystemPrompt(ctx context.Context) string {
 	if e.config != nil && videoevidence.Supports(e.config.VideoEvidenceCitation) {
 		videoPrompt = videoevidence.ProtocolPrompt()
 		if e.config.AnswerContractEnabled {
+			videoPrompt += `
+
+For a request to locate a topic separately in multiple named videos: first use native knowledge_search/grep_chunks to discover candidate documents. Before the final answer, output exactly one intermediate JSON object with version "1", task_type "multi_video_location", a short semantic topic, and videos (array of title and knowledge_base_id). Copy each title and KB ID exactly from native search results; include every requested video you can identify, never invent titles or IDs. This intermediate JSON is processed by the server, not shown to the user. The server independently retrieves each matched document and then requests the final answer. Do not output it before native results identify at least two candidate videos.`
 			videoPrompt += fmt.Sprintf(`
 
-Final response contract: output exactly one JSON object using %s with fields schema_version, mode, coverage, content_markdown, and blocks. Set mode to exactly "reasoning" for this agent. Each block type must be exactly one of "summary", "topic", "comparison", "steps", or "evidence"; never use "video_evidence" or "answer" as a block type. Do not output Markdown fences or trailing text. Each block may contain only type, title, text_markdown, and evidence_refs. Citation handles in content_markdown and text_markdown must use the exact form <ref id="cN"/> and must be listed in the matching block's evidence_refs. Ordinary knowledge/Wiki cN handles may be cited for explanation, but they remain normal sources and never become video evidence; video locations require a validated transcript handle. Every video location must be a complete sentence. If there are more than 3 validated video locations, use a Markdown table with exactly the headers "定位" and "核心主旨". Do not write video titles beside citations; the client renders only the validated time range.`, videoevidence.AnswerContractVersion)
+Final response contract: output exactly one JSON object using %s with fields schema_version, mode, coverage, content_markdown, and blocks. Set mode to exactly "reasoning" for this agent. Each block type must be exactly one of "summary", "topic", "comparison", "steps", or "evidence"; never use "video_evidence" or "answer" as a block type. Do not output Markdown fences or trailing text. Each block may contain only type, title, text_markdown, and evidence_refs. Citation handles in content_markdown and text_markdown must use the exact form <ref id="cN"/> and must be listed in the matching block's evidence_refs. Ordinary knowledge/Wiki cN handles may be cited for explanation, but they remain normal sources and never become video evidence; video locations require a validated transcript handle. Every video location must be a complete sentence. Do not output a Markdown table of video locations yourself and never hand-write times, video IDs, or evidence IDs; the system appends the validated location table and renders only the validated time range.`, videoevidence.AnswerContractVersion)
 		}
 	}
 	return strings.TrimRight(prompt, " \t\r\n") + e.memoryPrompt + e.modelContext.ProtocolPrompt() + videoPrompt
@@ -406,6 +409,7 @@ func (e *AgentEngine) executeLoop(
 
 	emptyRetries := 0
 	contractRetries := 0
+	comparisonRetries := 0
 	consecutiveSameContent := 0
 	lastResponseContent := ""
 loop:
@@ -415,23 +419,10 @@ loop:
 		case <-ctx.Done():
 			logger.Warnf(ctx, "[Agent] Context cancelled at round %d: %v",
 				state.CurrentRound+1, ctx.Err())
-			// Try to salvage existing results
-			if totalTC := countTotalToolCalls(state.RoundSteps); totalTC > 0 {
-				logger.Infof(ctx, "[Agent] Synthesizing final answer from %d existing tool results",
-					totalTC)
-				_ = e.streamFinalAnswerToEventBus(ctx, query, state, sessionID)
-				state.IsComplete = true
-				if e.requiresAuditedProductionGraphWrite() && !e.hasAuditedProductionGraphWrite(state) {
-					state.CompletionStatus = "failed"
-					state.CompletionFailureReason = "production_graph_missing_audited_wiki_write"
-				} else {
-					state.CompletionStatus = "succeeded"
-					state.CompletionFailureReason = ""
-				}
-			} else {
-				state.CompletionStatus = "failed"
-				state.CompletionFailureReason = "context_cancelled"
-			}
+			// A cancelled request cannot safely synthesize or publish a final
+			// answer, even if earlier tool calls produced partial evidence.
+			state.CompletionStatus = "failed"
+			state.CompletionFailureReason = "context_cancelled"
 			return state, ctx.Err()
 		default:
 		}
@@ -441,7 +432,7 @@ loop:
 		// every exit path (break/continue/next) without having to sprinkle
 		// manual finish calls throughout the many branches below.
 		outcome, iterErr := e.runReActIteration(ctx, state, &messages, tools,
-			sessionID, messageID, query, &emptyRetries, &contractRetries, &consecutiveSameContent, &lastResponseContent)
+			sessionID, messageID, query, &emptyRetries, &contractRetries, &comparisonRetries, &consecutiveSameContent, &lastResponseContent)
 		if iterErr != nil {
 			return state, iterErr
 		}
@@ -530,7 +521,7 @@ func answerContractRetryPrompt(err error) string {
 		return fmt.Sprintf("上一轮回答只覆盖了部分视频证据。请先继续使用 WeKnora 原生检索补齐问题涉及的视频，再只输出一个合法 %s JSON；不得按标题猜测视频或证据，不得把未校验内容写入回答。若仍无法补齐，必须将 coverage 设为 partial，并明确缺少视频覆盖。", videoevidence.AnswerContractVersion)
 	}
 	if reason == "missing_video_table" {
-		return fmt.Sprintf("上一轮回答包含超过 3 个有效视频定位，但没有按格式输出表格。请只输出一个合法 %s JSON；在 content_markdown 或某个 block 的 text_markdown 中使用 Markdown 表格，表头必须是 `定位` 和 `核心主旨`，每条定位写成完整句子并在同一行保留对应 <ref id=\"cN\"/>，只使用工具返回的句柄。视频引用只保留系统渲染的时间范围，不要自行写标题、时间或 ID。", videoevidence.AnswerContractVersion)
+		return fmt.Sprintf("上一轮回答包含超过 3 个有效视频定位，但没有按格式输出表格。请只输出一个合法 %s JSON；在 content_markdown 或某个 block 的 text_markdown 中使用 Markdown 表格，表头必须是 `时间位置`、`内容` 和 `依据`：每个时间位置单元格放一个 <ref id=\"cN\"/>，内容列概述该处讲了什么，依据列引用或紧贴转写原文说明为何选取该处，只使用工具返回的句柄。不要自行写标题、时间或 ID，系统会渲染已验证的时间范围。", videoevidence.AnswerContractVersion)
 	}
 	return fmt.Sprintf("上一轮响应违反了 %s 协议（%v）。请只输出一个未加围栏的合法 JSON 对象，且尽量简短：content_markdown 不超过 400 个字符，blocks 最多 3 个，每个 text_markdown 不超过 500 个字符。schema_version 必须是 %q，mode 必须是 %q，coverage 必须是 complete/partial/none 之一，block 类型只能是 summary/topic/comparison/steps/evidence。字符串内部不要使用裸双引号，引用视频标题或术语时使用《》或「」；如果必须使用双引号，必须写成 \\\"。比较多个明确视频时，至少输出两个 comparison blocks，并覆盖两个视频；每个 evidence_refs 必须逐字对应同一 block 文本中的 <ref id=\"cN\"/>，只能使用工具返回的句柄。不要输出思考过程、解释或 JSON 之外的内容。",
 		videoevidence.AnswerContractVersion, err, videoevidence.AnswerContractVersion, videoevidence.AnswerModeReasoning)
@@ -549,7 +540,7 @@ func (e *AgentEngine) runReActIteration(
 	messagesPtr *[]chat.Message,
 	tools []chat.Tool,
 	sessionID, assistantMessageID, query string,
-	emptyRetries, contractRetries, consecutiveSameContent *int,
+	emptyRetries, contractRetries, comparisonRetries, consecutiveSameContent *int,
 	lastResponseContent *string,
 ) (outcome iterOutcome, retErr error) {
 	roundStart := time.Now()
@@ -680,6 +671,15 @@ func (e *AgentEngine) runReActIteration(
 		ToolCalls:        make([]types.ToolCall, 0),
 		Timestamp:        time.Now(),
 	}
+	if e.config != nil && e.config.AnswerContractEnabled &&
+		isNaturalStopFinishReason(response.FinishReason) && len(response.ToolCalls) == 0 {
+		if videoevidence.IsCandidateManifestOutput(response.Content) {
+			if ctx.Err() != nil {
+				return iterOutcomeBreak, ctx.Err()
+			}
+			return e.resolveCandidateManifest(ctx, state, messagesPtr, step, response.Content, sessionID, assistantMessageID, query)
+		}
+	}
 
 	// If the request was cancelled while the LLM was streaming (e.g. the
 	// user pressed "stop"), the stream driver still returns a usable
@@ -703,14 +703,44 @@ func (e *AgentEngine) runReActIteration(
 	// 2. Analyze: Check for stop conditions (natural stop with no tool calls)
 	verdict := e.analyzeResponse(ctx, response, step, state.CurrentRound, sessionID, roundStart)
 	if verdict.isDone {
+		// Native-first: a comparison query is answered directly from the
+		// retrieved evidence. The candidate manifest remains optional — if the
+		// model emitted one, resolveCandidateManifest already ran; otherwise we
+		// no longer fail the answer for skipping that intermediate step.
+		if verdict.contract.SchemaVersion != "" && verdict.contractErr == nil {
+			verdict.contractErr = candidateAnswerCoverageError(state, verdict.contract.Coverage)
+			if verdict.contractErr != nil {
+				logger.Warnf(ctx, "[Agent][Round-%d] candidateAnswerCoverageError triggered: coverage=%s required=%v status=%v",
+					round, verdict.contract.Coverage, state.RequiredKnowledgeIDs, state.CandidateSearchStatus)
+			}
+		}
 		if verdict.contract.SchemaVersion != "" && verdict.contractErr == nil {
 			projection, err := e.projectAnswerContract(verdict.contract, state.KnowledgeRefs)
 			if err != nil {
 				logger.Errorf(ctx, "[Agent][Round-%d] Answer evidence projection failed: %v", round, err)
 				verdict.contractErr = err
 			} else {
-				if err := videoevidence.ValidateComparisonAnswer(query, verdict.contract, projection); err != nil {
+				citedRefs := make([]string, 0)
+				for _, block := range verdict.contract.Blocks {
+					citedRefs = append(citedRefs, block.EvidenceRefs...)
+				}
+				projectedVideos := make([]string, 0, len(projection.Evidence))
+				for _, evidence := range projection.Evidence {
+					projectedVideos = append(projectedVideos, evidence.VideoID)
+				}
+				logger.Warnf(ctx, "[Agent][Round-%d] Projection detail: coverage=%s projected_video_ids=%v cited_evidence_refs=%v",
+					round, verdict.contract.Coverage, projectedVideos, citedRefs)
+				if err := videoevidence.ValidateComparisonAnswerForKnowledgeIDs(
+					query, verdict.contract, projection, state.RequiredKnowledgeIDs,
+				); err != nil {
 					logger.Errorf(ctx, "[Agent][Round-%d] Comparison answer validation failed: %v", round, err)
+					if content := verdict.step.Thought; len(content) > 0 {
+						contentPreview := content
+						if len(contentPreview) > 800 {
+							contentPreview = contentPreview[:800]
+						}
+						logger.Warnf(ctx, "[Agent][Round-%d] Failed answer content: %s", round, contentPreview)
+					}
 					verdict.contractErr = err
 				} else {
 					verdict.finalAnswer = e.modelContext.DecodeOutputText(projection.RenderedMarkdown)
@@ -720,16 +750,35 @@ func (e *AgentEngine) runReActIteration(
 			}
 		}
 		if verdict.contractErr != nil {
-			if e.config != nil && e.config.AnswerContractEnabled && *contractRetries < maxAnswerContractRetries {
-				*contractRetries++
+			reason := answerContractFailureReason(verdict.contractErr)
+			retryCounter := contractRetries
+			if reason == "missing_video_table" {
+				retryCounter = comparisonRetries
+			}
+			if e.config != nil && e.config.AnswerContractEnabled && *retryCounter < maxAnswerContractRetries {
+				*retryCounter++
 				state.RoundSteps = append(state.RoundSteps, verdict.step)
+				retryPrompt := answerContractRetryPrompt(verdict.contractErr)
+				// For missing_video_coverage, surface the available video evidence
+				// handles so the model can cite the correct transcript chunks
+				// instead of ordinary/summary chunks.
+				if reason == "missing_video_coverage" {
+					videoHandles := e.videoEvidenceHandles(state.KnowledgeRefs)
+					if len(videoHandles) > 0 {
+						handleList := make([]string, 0, len(videoHandles))
+						for h, ev := range videoHandles {
+							handleList = append(handleList, fmt.Sprintf("%s(video=%s)", h, ev.VideoID))
+						}
+						retryPrompt = fmt.Sprintf("%s\n\n当前可用的视频证据 handle 为：%s。请仅从这些 handle 中选择引用，每个视频至少引用一个 handle。",
+							retryPrompt, strings.Join(handleList, ", "))
+					}
+				}
 				*messagesPtr = append(*messagesPtr, chat.Message{
 					Role:    "user",
-					Content: answerContractRetryPrompt(verdict.contractErr),
+					Content: retryPrompt,
 				})
 				return iterOutcomeContinue, nil
 			}
-			reason := answerContractFailureReason(verdict.contractErr)
 			state.CompletionStatus = "failed"
 			state.CompletionFailureReason = reason
 			state.FinalAnswer = answerContractFailureMessage(reason)

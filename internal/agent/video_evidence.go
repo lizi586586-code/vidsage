@@ -8,6 +8,7 @@ import (
 
 	agenttools "github.com/Tencent/WeKnora/internal/agent/tools"
 	"github.com/Tencent/WeKnora/internal/event"
+	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/videoevidence"
 )
@@ -149,7 +150,7 @@ func (e *AgentEngine) projectAnswerContract(
 	refs []*types.SearchResult,
 ) (videoevidence.AnswerProjection, error) {
 	handles := e.videoEvidenceHandles(refs)
-	ordinaryHandles := e.ordinaryAnswerHandles(refs)
+	ordinaryHandles := e.ordinaryAnswerHandles(refs, handles)
 	return videoevidence.ProjectAnswerContractWithOrdinaryHandles(contract, handles, ordinaryHandles)
 }
 
@@ -160,16 +161,23 @@ func (e *AgentEngine) videoEvidenceHandles(refs []*types.SearchResult) map[strin
 	}
 	e.modelContext.RegisterSearchResults(refs)
 	scope := videoevidence.ScopeFromReferences(refs)
+	diagNoCandidate, diagNotLinkable, diagNoHandle := 0, 0, 0
+	var diagSampleErrors []string
 	for _, ref := range refs {
 		if ref == nil {
 			continue
 		}
 		candidate, ok := videoevidence.CandidateFromSearchResult(ref)
 		if !ok {
+			diagNoCandidate++
 			continue
 		}
 		evidence, err := videoevidence.NormalizeCandidate(candidate, scope)
 		if err != nil || !evidence.Linkable {
+			diagNotLinkable++
+			if len(diagSampleErrors) < 3 && err != nil {
+				diagSampleErrors = append(diagSampleErrors, err.Error())
+			}
 			continue
 		}
 		handle := strings.TrimSpace(e.modelContext.ChunkHandle(ref.ID))
@@ -177,18 +185,25 @@ func (e *AgentEngine) videoEvidenceHandles(refs []*types.SearchResult) map[strin
 			handle = strings.TrimSpace(e.modelContext.ChunkHandle(candidate.ChunkID))
 		}
 		if handle == "" {
+			diagNoHandle++
 			continue
 		}
 		handles[handle] = evidence
+	}
+	if len(handles) == 0 && len(refs) > 0 {
+		logger.Warnf(context.Background(),
+			"[Agent][videoEvidenceHandles] diag: refs=%d no_candidate=%d not_linkable=%d no_handle=%d handles=%d sample_errors=%v",
+			len(refs), diagNoCandidate, diagNotLinkable, diagNoHandle, len(handles), diagSampleErrors)
 	}
 	return handles
 }
 
 // ordinaryAnswerHandles returns request-local handles that may remain normal
 // knowledge/Wiki citations in a mixed answer. Transcript-shaped references
-// are deliberately excluded even when malformed or stale: they must either
-// pass the video evidence whitelist or fail closed.
-func (e *AgentEngine) ordinaryAnswerHandles(refs []*types.SearchResult) map[string]struct{} {
+// that already passed the video evidence whitelist are excluded; malformed
+// transcript chunks fall back to ordinary citations so model references are
+// still rendered instead of being dropped entirely.
+func (e *AgentEngine) ordinaryAnswerHandles(refs []*types.SearchResult, videoHandles map[string]videoevidence.Evidence) map[string]struct{} {
 	handles := make(map[string]struct{})
 	if e == nil || e.modelContext == nil || len(refs) == 0 {
 		return handles
@@ -199,14 +214,22 @@ func (e *AgentEngine) ordinaryAnswerHandles(refs []*types.SearchResult) map[stri
 			continue
 		}
 		sourceType := strings.ToLower(strings.TrimSpace(ref.Metadata["source_type"]))
-		if sourceType == videoevidence.SourceTypeTranscript ||
+		isTranscriptShaped := sourceType == videoevidence.SourceTypeTranscript ||
 			strings.EqualFold(strings.TrimSpace(ref.ChunkType), videoevidence.SourceTypeTranscript) ||
-			strings.EqualFold(strings.TrimSpace(ref.ChunkType), "summary") {
+			strings.EqualFold(strings.TrimSpace(ref.ChunkType), "summary")
+		handle := strings.TrimSpace(e.modelContext.ChunkHandle(ref.ID))
+		if handle == "" {
 			continue
 		}
-		if handle := strings.TrimSpace(e.modelContext.ChunkHandle(ref.ID)); handle != "" {
-			handles[handle] = struct{}{}
+		// If this chunk already became a video evidence handle, skip it to avoid
+		// double-counting. Otherwise, transcript chunks that failed enrichment
+		// are still kept as ordinary citations.
+		if isTranscriptShaped {
+			if _, isVideo := videoHandles[handle]; isVideo {
+				continue
+			}
 		}
+		handles[handle] = struct{}{}
 	}
 	return handles
 }

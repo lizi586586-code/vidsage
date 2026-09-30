@@ -21,7 +21,7 @@ const createMenuChildren = () => reactive<MenuChild[]>([])
 
 export const useMenuStore = defineStore('menuStore', () => {
   const menuArr = reactive<MenuItem[]>([
-    { title: '首页', icon: 'home', path: 'home' },
+    { title: '课程库', icon: 'home', path: 'home' },
     { title: '知识库', icon: 'zhishiku', path: 'knowledge-bases' },
     { title: '智能体', icon: 'agent', path: 'agents', requiredCapability: 'agents' },
     { title: '知识图谱', icon: 'graph', path: 'graph' },

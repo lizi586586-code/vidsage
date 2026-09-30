@@ -7,7 +7,7 @@
     :close-on-overlay-click="true"
     :destroy-on-close="true"
     :footer="false"
-    header="上传视频"
+    header="上传课程"
     dialog-class-name="video-upload-dialog"
     @close="close"
   >
@@ -26,8 +26,8 @@
         >
           <div class="upload-dropzone__content">
             <span class="upload-dropzone__icon"><t-icon name="folder-open" /></span>
-            <p><span>选择视频</span>或拖拽到此处</p>
-            <small>支持单个视频文件，最大 1GB</small>
+            <p><span>选择课程视频</span>或拖拽到此处</p>
+            <small>支持单个课程视频文件，最大 1GB</small>
           </div>
         </t-upload>
 
@@ -65,7 +65,7 @@
       <div v-else-if="state === 'success'" class="upload-state upload-state--success">
         <t-icon name="check-circle-filled" />
         <h3>已上传</h3>
-        <p>视频已加入列表，封面和时长会自动补齐</p>
+        <p>课程已加入课程库，封面和时长会自动补齐</p>
       </div>
 
       <div v-else-if="state === 'refresh-failed'" class="upload-state upload-state--warning">

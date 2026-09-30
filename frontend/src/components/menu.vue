@@ -133,7 +133,7 @@
                         <div class="submenu_empty">{{ t('menu.noSessions') }}</div>
                     </template>
                     <template v-else>
-                        <template v-for="group in filteredGroupedSessions" :key="group.key">
+                        <template v-for="group in visibleGroupedSessions" :key="group.key">
                             <div v-if="group.label" class="timeline_header session-list-row session-list-row--flat">
                                 <span class="session-list-row__body">
                                     <span class="timeline_header-label">{{ group.label }}</span>
@@ -158,6 +158,14 @@
                                 </div>
                             </div>
                         </template>
+                        <button
+                            v-if="filteredSessionCount > SESSION_LIST_DEFAULT_LIMIT"
+                            type="button"
+                            class="session-list-toggle"
+                            @click="toggleSessionListVisibility"
+                        >
+                            {{ canExpandSessionList ? '展开更多' : '收起' }}
+                        </button>
                         <div v-if="activeBucket?.loading && filteredGroupedSessions.length > 0"
                             class="session-list-loading session-list-row session-list-row--flat">
                             <span class="session-list-row__body">
@@ -442,8 +450,8 @@ const getIconActiveState = (itemPath: string) => {
 };
 
 // 分离上下两部分菜单（使用 visibleMenuArr 以便 lite 模式过滤 logout）
-// 顺序：首页 → 知识库 → 智能体 → 知识图谱 → 用户问答 → 对话
-const TOP_MENU_ORDER = ['home', 'knowledge-bases', 'agents', 'graph', 'queries', 'ai-chat']
+// 顺序：对话 → 课程库 → 知识库 → 智能体 → 知识图谱 → 用户问答
+const TOP_MENU_ORDER = ['ai-chat', 'home', 'knowledge-bases', 'agents', 'graph', 'queries']
 const topMenuItems = computed<MenuItem[]>(() => {
     const filtered = (visibleMenuArr.value as unknown as MenuItem[]).filter((item: MenuItem) =>
         TOP_MENU_ORDER.includes(item.path)
@@ -496,6 +504,33 @@ const filteredGroupedSessions = computed(() => {
         items: Array<SessionForGrouping & { path: string; title: string }>;
     }>;
 });
+
+const SESSION_LIST_DEFAULT_LIMIT = 5;
+const SESSION_LIST_INCREMENT = 5;
+const visibleSessionLimit = ref(SESSION_LIST_DEFAULT_LIMIT);
+const filteredSessionCount = computed(() =>
+    filteredGroupedSessions.value.reduce((total, group) => total + group.items.length, 0),
+);
+const canExpandSessionList = computed(() => visibleSessionLimit.value < filteredSessionCount.value);
+const visibleGroupedSessions = computed(() => {
+    let remaining = visibleSessionLimit.value;
+    return filteredGroupedSessions.value.flatMap((group) => {
+        if (remaining <= 0) return [];
+        const items = group.items.slice(0, remaining);
+        remaining -= items.length;
+        return items.length ? [{ ...group, items }] : [];
+    });
+});
+const toggleSessionListVisibility = () => {
+    if (canExpandSessionList.value) {
+        visibleSessionLimit.value = Math.min(
+            filteredSessionCount.value,
+            visibleSessionLimit.value + SESSION_LIST_INCREMENT,
+        );
+        return;
+    }
+    visibleSessionLimit.value = SESSION_LIST_DEFAULT_LIMIT;
+};
 
 const refreshSessionListScrollability = async () => {
     await nextTick();
@@ -836,6 +871,7 @@ const loadBucketPage = async (key: string, page?: number, token?: number) => {
 const switchSessionBucket = async (key: string) => {
     if (key === activeSessionBucketKey.value) return;
     activeSessionBucketKey.value = key;
+    visibleSessionLimit.value = SESSION_LIST_DEFAULT_LIMIT;
     const bucket = sessionBuckets.value[key];
     if (bucket && !bucket.loaded && !bucket.loading) {
         await loadBucketPage(key, 1);
@@ -880,6 +916,7 @@ const syncActiveBucketFromChat = async (sessionId: string | undefined) => {
     if (!bucketKey || bucketKey === activeSessionBucketKey.value) return;
 
     activeSessionBucketKey.value = bucketKey;
+    visibleSessionLimit.value = SESSION_LIST_DEFAULT_LIMIT;
     const bucket = sessionBuckets.value[bucketKey];
     if (bucket && !bucket.loaded && !bucket.loading) {
         await loadBucketPage(bucketKey, 1);
@@ -2036,4 +2073,20 @@ html[theme-mode="dark"] .aside_box .menu_item_active .menu_icon img.icon {
         border-color: var(--td-error-color);
     }
 }
+
+.session-list-toggle {
+    width: 100%;
+    padding: 8px 12px;
+    border: 0;
+    background: transparent;
+    color: var(--td-brand-color);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+}
+
+.session-list-toggle:hover {
+    color: var(--td-brand-color-hover);
+}
+
 </style>

@@ -7,6 +7,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$PROJECT_ROOT/docker-compose.acceptance.yml"
 OFFICIAL_COMPOSE_FILE="$PROJECT_ROOT/docker-compose.yml"
 STATE_DIR="$PROJECT_ROOT/tmp/local-acceptance"
+OPERATION_LOCK_DIR="$STATE_DIR/operation.lock"
 FRONTEND_PID_FILE="$STATE_DIR/frontend.pid"
 FRONTEND_LOG="$PROJECT_ROOT/logs/local-acceptance-frontend.log"
 FRONTEND_PORT="${LOCAL_ACCEPTANCE_FRONTEND_PORT:-18091}"
@@ -67,6 +68,13 @@ require_docker() {
     require_command curl
     docker info >/dev/null 2>&1 || die 'Docker Desktop 未运行，先启动 Docker Desktop 后重试'
     compose version >/dev/null 2>&1 || die '当前 Docker 不支持 Compose'
+}
+
+acquire_operation_lock() {
+    mkdir -p "$STATE_DIR"
+    mkdir "$OPERATION_LOCK_DIR" 2>/dev/null \
+        || die "另一个本地验收操作正在运行；请等待完成后重试（锁目录: ${OPERATION_LOCK_DIR}）"
+    trap 'rmdir "$OPERATION_LOCK_DIR" 2>/dev/null || true' EXIT
 }
 
 container_exists() {
@@ -231,6 +239,21 @@ wait_for_http() {
     return 1
 }
 
+wait_for_backend_network() {
+    local timeout_seconds="$1"
+    local elapsed=0 network
+    while [ "$elapsed" -lt "$timeout_seconds" ]; do
+        network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$BACKEND_CONTAINER" 2>/dev/null || true)"
+        if [ -n "$network" ]; then
+            printf '%s\n' "$network"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    return 1
+}
+
 start_frontend() {
     mkdir -p "$STATE_DIR" "$PROJECT_ROOT/logs"
     if pid_is_running "$FRONTEND_PID_FILE"; then
@@ -259,12 +282,11 @@ start_fixed_frontend() {
         npm run build
     )
     docker build -t "$FRONTEND_IMAGE" "$PROJECT_ROOT/frontend"
+    local network
+    network="$(wait_for_backend_network 30)" || die 'custom-backend 未加入验收网络，无法启动当前前端'
     if container_exists "$FRONTEND_CONTAINER"; then
         docker rm -f "$FRONTEND_CONTAINER" >/dev/null
     fi
-    local network
-    network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$BACKEND_CONTAINER" 2>/dev/null || true)"
-    [ -n "$network" ] || die 'custom-backend 未加入验收网络，无法启动当前前端'
     docker run -d \
         --name "$FRONTEND_CONTAINER" \
         --network "$network" \
@@ -376,9 +398,9 @@ EOF
 }
 
 case "${1:-up}" in
-    up) up ;;
-    down) down ;;
-    restart) restart ;;
+    up) acquire_operation_lock; up ;;
+    down) acquire_operation_lock; down ;;
+    restart) acquire_operation_lock; restart ;;
     status) status ;;
     logs) logs ;;
     help|--help|-h) usage ;;

@@ -73,6 +73,7 @@ Avoid:
 - queries (required): 1–5 semantic questions or conceptual statements.
   These should reflect the meaning or topic you want embeddings to capture.
 - knowledge_base_ids (optional): limit the search scope.
+- knowledge_ids (optional): restrict results to document IDs already present in the authorized request scope.
 
 ## Output
 Returns chunks ranked by semantic similarity, reranked when applicable.  
@@ -97,6 +98,13 @@ Each chunk has a short cN source ID and belongs to a dN document ID. Results rep
       },
       "minItems": 0,
       "maxItems": 10
+    },
+    "knowledge_ids": {
+      "type": "array",
+      "description": "Optional: restrict results to these document IDs, which must already be in the authorized request scope.",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "maxItems": 50
     }
   },
   "required": ["queries"]
@@ -107,6 +115,7 @@ Each chunk has a short cN source ID and belongs to a dN document ID. Results rep
 type KnowledgeSearchInput struct {
 	Queries          []string `json:"queries"`
 	KnowledgeBaseIDs []string `json:"knowledge_base_ids,omitempty"`
+	KnowledgeIDs     []string `json:"knowledge_ids,omitempty"`
 }
 
 // searchResultWithMeta wraps search result with metadata about which query matched it
@@ -205,6 +214,49 @@ func (t *KnowledgeSearchTool) Execute(ctx context.Context, args json.RawMessage)
 			}
 		}
 		searchTargets = filteredTargets
+	}
+	if len(input.KnowledgeIDs) > 0 {
+		allowed, err := authorizeKnowledgeIDsInSearchTargets(ctx, searchTargets, input.KnowledgeIDs, t.knowledgeService)
+		if err != nil {
+			return &types.ToolResult{Success: false, Error: err.Error()}, err
+		}
+		allowedSet := make(map[string]struct{}, len(allowed))
+		knowledgeIDsByKB := make(map[string][]string, len(allowed))
+		for _, id := range allowed {
+			allowedSet[id] = struct{}{}
+			knowledge, err := t.knowledgeService.GetKnowledgeByIDOnly(ctx, id)
+			if err != nil || knowledge == nil {
+				if err == nil {
+					err = fmt.Errorf("knowledge %s not found", id)
+				}
+				return &types.ToolResult{Success: false, Error: err.Error()}, err
+			}
+			knowledgeIDsByKB[knowledge.KnowledgeBaseID] = append(knowledgeIDsByKB[knowledge.KnowledgeBaseID], id)
+		}
+		filtered := make(types.SearchTargets, 0, len(searchTargets))
+		for _, target := range searchTargets {
+			if target == nil {
+				continue
+			}
+			ids := make([]string, 0, len(target.KnowledgeIDs))
+			if target.Type == types.SearchTargetTypeKnowledge {
+				for _, id := range target.KnowledgeIDs {
+					if _, ok := allowedSet[id]; ok {
+						ids = append(ids, id)
+					}
+				}
+			} else {
+				ids = append(ids, knowledgeIDsByKB[target.KnowledgeBaseID]...)
+			}
+			if len(ids) == 0 {
+				continue
+			}
+			filtered = append(filtered, &types.SearchTarget{
+				Type: types.SearchTargetTypeKnowledge, KnowledgeBaseID: target.KnowledgeBaseID,
+				TenantID: target.TenantID, KnowledgeIDs: ids,
+			})
+		}
+		searchTargets = filtered
 	}
 
 	// Validate search targets
@@ -1335,6 +1387,7 @@ func (t *KnowledgeSearchTool) formatOutput(
 		}
 
 		formattedResults = append(formattedResults, map[string]interface{}{
+			"id":                  result.ID,
 			"result_index":        i + 1,
 			"content":             result.Content,
 			"knowledge_id":        result.KnowledgeID,

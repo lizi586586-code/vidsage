@@ -4,7 +4,15 @@
     <!-- Collapsed intermediate steps (tree root) -->
     <div v-if="shouldShowCollapsedSteps" class="tree-container">
       <div class="tool-event">
-        <div class="action-card tree-root" @click="toggleIntermediateSteps">
+        <div
+          class="action-card tree-root"
+          role="button"
+          tabindex="0"
+          :aria-expanded="showIntermediateSteps"
+          @click.stop="toggleIntermediateSteps"
+          @keydown.enter.prevent.stop="toggleIntermediateSteps"
+          @keydown.space.prevent.stop="toggleIntermediateSteps"
+        >
           <div class="action-header">
             <div class="action-title">
               <span class="action-title-icon icon-mask" :style="maskIconStyle(agentIcon)" aria-hidden="true" />
@@ -128,10 +136,10 @@
                       <t-icon v-if="event.tool_name" class="action-title-icon"
                         :name="getToolIconName(event.tool_name)" />
                       <t-tooltip v-if="event.tool_name === 'todo_write' && event.tool_data?.steps"
-                        :content="t('agent.updatePlan')" placement="top">
+                        :content="t('agent.updatePlan')" placement="top" :overlay-inner-style="thinkingTooltipStyle">
                         <span class="action-name">{{ $t('agent.updatePlan') }}</span>
                       </t-tooltip>
-                      <t-tooltip v-else :content="getToolTitle(event)" placement="top">
+                      <t-tooltip v-else :content="getToolTitle(event)" placement="top" :overlay-inner-style="thinkingTooltipStyle">
                         <span class="action-name">{{ getToolTitle(event) }}</span>
                       </t-tooltip>
                     </div>
@@ -384,12 +392,12 @@
                   <div class="action-title">
                     <t-icon v-if="event.tool_name" class="action-title-icon" :name="getToolIconName(event.tool_name)" />
                     <t-tooltip v-if="event.tool_name === 'todo_write' && event.tool_data?.steps"
-                      :content="t('agent.updatePlan')" placement="top">
+                      :content="t('agent.updatePlan')" placement="top" :overlay-inner-style="thinkingTooltipStyle">
                       <span class="action-name">
                         {{ $t('agent.updatePlan') }}
                       </span>
                     </t-tooltip>
-                    <t-tooltip v-else :content="getToolTitle(event)" placement="top">
+                    <t-tooltip v-else :content="getToolTitle(event)" placement="top" :overlay-inner-style="thinkingTooltipStyle">
                       <span class="action-name">{{ getToolTitle(event) }}</span>
                     </t-tooltip>
                   </div>
@@ -593,6 +601,7 @@ const uiStore = useUIStore();
 const settingsStore = useSettingsStore();
 const authStore = useAuthStore();
 const { t } = useI18n();
+const thinkingTooltipStyle = { fontSize: '12px', lineHeight: '20px' };
 
 ensureMermaidInitialized();
 
@@ -792,11 +801,6 @@ const wikiGraphHref = computed(() => {
     query: { tab: 'graph', slug: wikiDrawerPage.value.slug },
   }).href;
 });
-
-const openRouteInNewTab = (path: string) => {
-  const href = router.resolve(path).href;
-  window.open(href, '_blank', 'noopener,noreferrer');
-};
 
 const handleWikiDrawerClick = (e: MouseEvent) => {
   const target = e.target as HTMLElement;
@@ -2242,13 +2246,9 @@ const onRootClick = (e: Event) => {
     })) {
       return;
     }
-    if (kbId) {
-      try {
-        openRouteInNewTab(`/platform/knowledge-bases/${kbId}`);
-      } catch (error) {
-        console.error('Failed to navigate to knowledge base:', error);
-      }
-    }
+    // A citation without an openable detail drawer is intentionally inert.
+    // Never fall back to the knowledge-base list, which loses the cited source
+    // and takes the user out of the current answer context.
     return;
   }
 
@@ -2342,13 +2342,8 @@ const onRootKeydown = (e: KeyboardEvent) => {
       })) {
         return;
       }
-      if (kbId) {
-        try {
-          openRouteInNewTab(`/platform/knowledge-bases/${kbId}`);
-        } catch (error) {
-          console.error('Failed to navigate to knowledge base:', error);
-        }
-      }
+      // Keep unavailable citations inert; the knowledge-base list is not a
+      // valid detail target for an answer source.
     }
     return;
   }
@@ -2436,6 +2431,7 @@ const renderAgentMarkdown = (
     streaming: !isConversationDone.value,
     knowledgeReferences: getReferencesForDrawer(),
     showVideoTitle: props.showVideoTitle ?? false,
+    hideUnavailableCitations: true,
     cachedMermaidSvgHtml: streamingMermaidSvgCache.value,
     prepareMarkdown: prepareAgentMarkdown,
     injectCachedMermaidSvg,
@@ -2916,6 +2912,7 @@ const handleAddToKnowledge = (answerEvent: any) => {
   margin-bottom: 10px;
   position: relative;
   --agent-step-text-size: 12px;
+  --agent-step-indent: 30px;
   --agent-step-summary-size: 12px;
   --agent-thinking-text-size: 14px;
   --agent-thinking-icon-size: 18px;
@@ -3057,7 +3054,7 @@ const handleAddToKnowledge = (answerEvent: any) => {
 
 .tree-child {
   position: relative;
-  padding-left: 42px;
+  padding-left: var(--agent-step-indent);
   padding-bottom: 0;
   margin-bottom: 18px;
 
@@ -3089,7 +3086,8 @@ const handleAddToKnowledge = (answerEvent: any) => {
 }
 
 .tree-child-content {
-  // child content area
+  min-width: 0;
+  width: 100%;
 }
 
 // Thinking detail content (inside action-details)
@@ -3172,6 +3170,12 @@ const handleAddToKnowledge = (answerEvent: any) => {
         .action-name,
         .results-summary-text {
           color: var(--td-text-color-primary);
+        }
+
+        .action-name {
+          background: none;
+          -webkit-text-fill-color: currentColor;
+          animation: none;
         }
       }
     }
@@ -3839,7 +3843,7 @@ const handleAddToKnowledge = (answerEvent: any) => {
 
   .tree-child .action-title-icon {
     position: absolute;
-    left: -42px;
+    left: calc(-1 * var(--agent-step-indent));
     top: 2px;
   }
 
@@ -3875,14 +3879,21 @@ const handleAddToKnowledge = (answerEvent: any) => {
 /* Collapsed in-progress thinking: animate status cues without moving the card. */
 .thinking-collapsed-active .action-name,
 .thinking-collapsed-active .action-summary {
-  color: transparent;
+  color: var(--td-text-color-secondary);
   background: linear-gradient(100deg, var(--td-text-color-secondary) 0%, var(--td-text-color-secondary) 32%, var(--td-text-color-primary) 50%, var(--td-text-color-secondary) 68%, var(--td-text-color-secondary) 100%);
   background-size: 300% 100%;
   background-position: 100% 0;
   background-clip: text;
   -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  -webkit-text-fill-color: var(--td-text-color-secondary);
   animation: thinking-collapsed-shimmer 2.2s ease-in-out infinite;
+}
+.thinking-collapsed-active:hover .action-name,
+.thinking-collapsed-active:hover .action-summary {
+  background: none;
+  color: var(--td-text-color-primary);
+  -webkit-text-fill-color: currentColor;
+  animation: none;
 }
 .thinking-collapsed-active .action-title-icon { animation: thinking-collapsed-status 2.2s ease-in-out infinite; }
 @keyframes thinking-collapsed-shimmer { 0% { background-position: 100% 0; } 82%, 100% { background-position: 0 0; } }
@@ -4037,7 +4048,7 @@ const handleAddToKnowledge = (answerEvent: any) => {
     }
 
     .chat-markdown-table {
-      width: fit-content;
+      width: 100%;
       max-width: 100%;
       overflow-x: auto;
       margin: 0 0 16px;
@@ -4049,7 +4060,8 @@ const handleAddToKnowledge = (answerEvent: any) => {
 
     table {
       display: table;
-      width: max-content;
+      width: 100%;
+      table-layout: fixed;
       min-width: 0;
       border-collapse: separate;
       border-spacing: 0;

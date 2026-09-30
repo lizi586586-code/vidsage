@@ -90,6 +90,23 @@ func TestAuthorizeKnowledgeInSearchTargetsAllowsBoundDocument(t *testing.T) {
 	}
 }
 
+func TestAuthorizeKnowledgeIDsInSearchTargetsRejectsOutOfScopeCandidate(t *testing.T) {
+	service := &scopeKnowledgeService{knowledge: &types.Knowledge{ID: "doc-2", KnowledgeBaseID: "kb-2"}}
+	targets := types.SearchTargets{{Type: types.SearchTargetTypeKnowledgeBase, KnowledgeBaseID: "kb-1"}}
+	if _, err := authorizeKnowledgeIDsInSearchTargets(context.Background(), targets, []string{"doc-2"}, service); err == nil {
+		t.Fatal("candidate outside the request scope must be rejected")
+	}
+}
+
+func TestAuthorizeKnowledgeIDsInSearchTargetsDeduplicates(t *testing.T) {
+	service := &scopeKnowledgeService{knowledge: &types.Knowledge{ID: "doc-1", KnowledgeBaseID: "kb-1"}}
+	targets := types.SearchTargets{{Type: types.SearchTargetTypeKnowledgeBase, KnowledgeBaseID: "kb-1"}}
+	got, err := authorizeKnowledgeIDsInSearchTargets(context.Background(), targets, []string{"doc-1", "doc-1"}, service)
+	if err != nil || len(got) != 1 || got[0] != "doc-1" {
+		t.Fatalf("authorized ids = %v, err = %v; want one doc-1", got, err)
+	}
+}
+
 func TestAuthorizeChunkInSearchTargetsRejectsDisabledFAQ(t *testing.T) {
 	chunkService := &scopeChunkService{chunk: &types.Chunk{
 		ID: "faq-1", KnowledgeID: "faq-document", KnowledgeBaseID: "kb-1",

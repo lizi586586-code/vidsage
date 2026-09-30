@@ -302,7 +302,7 @@ type Message struct {
 	ModelID string `json:"model_id,omitempty" gorm:"type:varchar(64);default:''"`
 	// ExecutionContext stores the non-secret per-turn scope required to safely
 	// generate contextual follow-up questions after the main stream completes.
-	ExecutionContext MessageExecutionContext `json:"-" gorm:"type:jsonb;column:execution_context"`
+	ExecutionContext MessageExecutionContext `json:"request_context,omitempty" gorm:"type:jsonb;column:execution_context"`
 	// KnowledgeID links this message to a Knowledge entry in the chat history knowledge base
 	// Used for vector search indexing: when set, the message content has been indexed as a Knowledge passage
 	KnowledgeID string `json:"knowledge_id,omitempty" gorm:"type:varchar(36);index"`
@@ -333,6 +333,13 @@ type MessageExecutionContext struct {
 	WebSearchEnabled      bool                      `json:"web_search_enabled"`
 	Locale                string                    `json:"locale,omitempty"`
 	SuggestionAttribution *SuggestionAttribution    `json:"suggestion_attribution,omitempty"`
+	ExecutionScope        string                    `json:"execution_scope,omitempty"`
+	AgentEnabled          bool                      `json:"agent_enabled"`
+	AutoRoute             bool                      `json:"auto_route"`
+	RequestedAgentID      string                    `json:"agent_id,omitempty"`
+	AgentSourceTenantID   uint64                    `json:"agent_source_tenant_id,omitempty"`
+	RequestedSummaryModel string                    `json:"summary_model_id,omitempty"`
+	DisableTitle          bool                      `json:"disable_title"`
 }
 
 func (c MessageExecutionContext) Value() (driver.Value, error) {

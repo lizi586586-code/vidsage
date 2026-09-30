@@ -182,6 +182,32 @@ func resolveAuthorizedSourceRefs(
 	return resolved, nil
 }
 
+func authorizeKnowledgeIDsInSearchTargets(
+	ctx context.Context,
+	searchTargets types.SearchTargets,
+	knowledgeIDs []string,
+	knowledgeService interfaces.KnowledgeService,
+) ([]string, error) {
+	resolved := make([]string, 0, len(knowledgeIDs))
+	seen := make(map[string]struct{}, len(knowledgeIDs))
+	for _, id := range knowledgeIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return nil, fmt.Errorf("knowledge_ids cannot contain empty values")
+		}
+		knowledge, err := authorizeKnowledgeInSearchTargets(ctx, searchTargets, id, knowledgeService)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[knowledge.ID]; exists {
+			continue
+		}
+		seen[knowledge.ID] = struct{}{}
+		resolved = append(resolved, knowledge.ID)
+	}
+	return resolved, nil
+}
+
 type knowledgeTagsFetcher func(context.Context, []string) (map[string][]*types.KnowledgeTag, error)
 
 func searchTargetsAllowKnowledgeID(

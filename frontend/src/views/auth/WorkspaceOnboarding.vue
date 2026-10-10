@@ -131,7 +131,7 @@ async function onTenantCreated(tenant: TenantInfo) {
 async function handleLogout() {
   await logoutApi()
   authStore.logout()
-  await router.replace('/login')
+  await router.replace('/')
 }
 </script>
 

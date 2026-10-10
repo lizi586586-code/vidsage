@@ -509,8 +509,8 @@ const handleLogout = async () => {
 
   MessagePlugin.success(t('auth.logout'))
 
-  // 跳转到登录页
-  router.push('/login')
+  // 退出后返回公开产品首页。
+  router.replace('/')
 }
 
 // 加载用户信息

@@ -8,7 +8,7 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import i18n from '@/i18n'
 import { isLegacyPostAuthLanding } from './legacyPostAuthLanding'
 
-/** Lite /桌面 WebView 硬刷新时可能只打开 `/`，用 session 记住上次页面以便恢复 */
+/** Lite 业务入口用 session 记住上次页面；公开产品首页不恢复业务页面。 */
 const LITE_LAST_PATH_KEY = 'weknora_lite_last_path'
 const AUTO_SETUP_FAILED_KEY = 'weknora_auto_setup_failed'
 
@@ -26,7 +26,6 @@ function isLiteEdition(authStore: ReturnType<typeof useAuthStore>) {
 
 function isLiteSpaDefaultEntry(to: RouteLocationNormalized) {
   return (
-    to.path === '/' ||
     to.path === '/platform' ||
     to.path === '/platform/videos' ||
     to.name === 'videoList'
@@ -48,12 +47,14 @@ const router = createRouter({
   routes: [
     {
       path: "/",
-      redirect: "/platform/videos",
+      name: "landing",
+      component: () => import("../views/videohub/Landing.vue"),
+      meta: { requiresAuth: false, requiresInit: false },
     },
     {
       path: "/login",
       name: "login",
-      component: () => import("../views/auth/Login.vue"),
+      component: () => import("../views/videohub/Landing.vue"),
       meta: { requiresAuth: false, requiresInit: false }
     },
     // Embed chat is a separate entry (embed.html + embed-main.ts), not this SPA.

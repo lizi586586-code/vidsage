@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="zh-CN" theme-mode="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Vidsage，专为网课博主打造的课程资产库与 AI 课程助手。">
+  <title>Vidsage · 课程资产库与 AI 课程助手 · 高保真设计预览</title>
+  <link rel="stylesheet" href="../../vidsage/frontend/src/assets/theme/theme.css">
+  <style>
+    /* Shared frosted tokens; each feature uses one main screenshot surface. */
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 104px; }
+    body { margin: 0; min-width: 320px; color: var(--td-text-color-primary); font: var(--td-font-body-medium); -webkit-font-smoothing: antialiased; background: repeating-linear-gradient(90deg, rgba(7,192,95,.05) 0 1px, transparent 1px 54px), repeating-linear-gradient(0deg, rgba(255,255,255,.28) 0 1px, transparent 1px 54px), linear-gradient(135deg, var(--td-brand-color-light), rgba(255,255,255,.86) 48%, var(--td-bg-color-secondarycontainer)); }
+    a { color: inherit; text-decoration: none; }
+    button { font: inherit; cursor: pointer; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, a:focus-visible { outline: 2px solid var(--td-brand-color); outline-offset: 4px; }
+    ::selection { background: var(--td-brand-color-light); }
+    svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+    .symbols { display: none; }
+    .container { width: min(1200px, calc(100% - 104px)); margin: 0 auto; }
+    .nav-shell { position: sticky; top: 0; z-index: 20; background: rgba(255,255,255,.72); backdrop-filter: blur(20px) saturate(180%); border-bottom: 1px solid var(--td-component-stroke); }
+    .nav { min-height: 72px; display: flex; align-items: center; gap: 28px; }
+    .wordmark { font: var(--td-font-headline-medium); font-weight: 650; letter-spacing: -.04em; }
+    .wordmark .dot { color: var(--td-brand-color); }
+    .nav-links { display: flex; gap: 24px; margin-left: auto; }
+    .nav-links a { position: relative; padding: 12px 0; font: var(--td-font-body-medium); color: var(--td-text-color-secondary); transition: color .2s; }
+    .nav-links a:hover { color: var(--td-text-color-primary); }
+    .nav-links a[aria-current="location"] { color: var(--td-text-color-brand); }
+    .nav-links a[aria-current="location"]::after { content: ''; position: absolute; bottom: 4px; left: 0; right: 0; height: 2px; background: var(--td-brand-color); }
+    .nav-actions { display: flex; align-items: center; gap: 16px; }
+    .login { padding: 8px; background: transparent; border: 0; border-radius: var(--td-radius-medium); }
+    .login:hover { background: var(--td-bg-color-secondarycontainer); }
+    .button { display: inline-flex; justify-content: center; align-items: center; gap: 12px; min-height: 48px; padding: 12px 20px; border-radius: var(--td-radius-large); border: 1px solid transparent; font: var(--td-font-body-medium); font-weight: 600; transition: background .2s, transform .2s, box-shadow .2s; }
+    .button-primary { color: var(--td-text-color-anti); background: var(--td-brand-color); }
+    .button-primary:hover { background: var(--td-brand-color-hover); transform: translateY(-1px); box-shadow: var(--td-shadow-1); }
+    .button-primary:active { background: var(--td-brand-color-active); }
+    .nav .button { min-height: 40px; padding: 8px 16px; border-radius: var(--td-radius-round); }
+    .menu-button { display: none; border: 1px solid var(--td-component-stroke); border-radius: var(--td-radius-large); width: 40px; height: 40px; background: rgba(255,255,255,.42); align-items: center; justify-content: center; }
+    .eyebrow { display: flex; align-items: center; gap: 8px; color: var(--td-text-color-secondary); font: var(--td-font-body-small); margin: 0 0 16px; }
+    .eyebrow::before { content: ''; width: 6px; height: 6px; border-radius: var(--td-radius-circle); background: var(--td-brand-color); flex-shrink: 0; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font: var(--td-font-headline-large); font-weight: 600; letter-spacing: -.025em; margin-bottom: 24px; }
+    h2 { font: var(--td-font-headline-medium); font-weight: 600; letter-spacing: -.02em; margin-bottom: 20px; }
+    h3 { font: var(--td-font-title-large); font-weight: 600; margin-bottom: 12px; }
+    .body-copy { color: var(--td-text-color-secondary); font: var(--td-font-body-large); margin-bottom: 24px; }
+    .hero { position: relative; padding: 58px 0 54px; min-height: 588px; display: flex; align-items: center; overflow: hidden; background: linear-gradient(180deg, rgba(233,248,236,.92), rgba(255,255,255,.58) 72%, rgba(243,243,243,.56)); backdrop-filter: blur(30px) saturate(118%); border-bottom: 1px solid rgba(255,255,255,.92); }
+    .hero::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .56; background-image: linear-gradient(rgba(7,192,95,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(7,192,95,.08) 1px, transparent 1px); background-size: 54px 54px; mask-image: linear-gradient(180deg, #000 0%, rgba(0,0,0,.1) 82%, transparent 100%); }
+    .hero-grid { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(0,1fr); justify-items: center; text-align: center; gap: 30px; }
+    .hero-copy { display: flex; flex-direction: column; align-items: center; width: 100%; }
+    .hero-copy h1 { white-space: nowrap; }
+    .hero-copy h1 span { display: inline; }
+    .hero-accent { color: var(--td-text-color-brand); font-style: normal; white-space: nowrap; }
+    .hero-copy .eyebrow { font: var(--td-font-body-medium); margin-bottom: 20px; }
+    .hero-copy .body-copy { max-width: 620px; }
+    .hero-visual { position: relative; min-width: 0; min-height: 224px; width: 100%; display: grid; place-items: center; }
+    .placeholder { position: relative; margin: 0; min-width: 0; border: 1px solid rgba(255,255,255,.9); border-radius: var(--td-radius-extraLarge); background: rgba(255,255,255,.42); backdrop-filter: blur(26px) saturate(112%); overflow: hidden; }
+    .window-top { min-height: 44px; display: flex; align-items: center; gap: 4px; padding: 10px 18px; border-bottom: 1px solid var(--td-component-stroke); background: rgba(255,255,255,.35); }
+    .window-top i { width: 5px; height: 5px; background: var(--td-text-color-disabled); border-radius: var(--td-radius-circle); }
+    .window-top span { margin-left: 12px; font: var(--td-font-body-small); color: var(--td-text-color-secondary); }
+    .window-top .preview-label { margin-left: auto; color: var(--td-text-color-placeholder); }
+    .overview { min-height: 380px; background: linear-gradient(140deg, var(--td-brand-color-light), rgba(255,255,255,.42) 65%); }
+    .ghost-workspace { display: grid; grid-template-columns: 72px 1fr; min-height: 330px; }
+    .ghost-sidebar { border-right: 1px solid var(--td-component-stroke); padding: 24px 12px; }
+    .ghost-sidebar i { display: block; height: 6px; background: var(--td-component-stroke); margin-bottom: 24px; border-radius: var(--td-radius-medium); }
+    .ghost-content { padding: 24px; }
+    .preview-title { font: var(--td-font-body-large); font-weight: 600; margin-bottom: 16px; }
+    .ghost-line { height: 6px; width: 100%; background: var(--td-component-stroke); border-radius: var(--td-radius-medium); }
+    .ghost-cards { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+    .ghost-card { aspect-ratio: 16 / 10; border: 1px solid rgba(255,255,255,.9); border-radius: var(--td-radius-large); background: rgba(255,255,255,.42); display: flex; align-items: end; padding: 12px; }
+    .ghost-card .ghost-line { width: 60%; }
+    .asset-note { margin: 18px 0 0; color: var(--td-text-color-placeholder); font: var(--td-font-body-small); }
+    .assistant-placeholder { position: absolute; width: 270px; right: 18px; bottom: 0; background: rgba(255,255,255,.86); backdrop-filter: blur(24px) saturate(112%); border: 1px solid rgba(255,255,255,.9); border-radius: var(--td-radius-extraLarge); box-shadow: var(--td-shadow-1); padding: 18px; }
+    .assistant-label { display: flex; align-items: center; gap: 8px; font: var(--td-font-body-medium); font-weight: 600; margin-bottom: 16px; }
+    .assistant-label svg { color: var(--td-text-color-brand); }
+    .assistant-placeholder .ghost-line { width: 86%; margin-bottom: 8px; }
+    .assistant-placeholder .ghost-line:last-of-type { width: 60%; }
+    .assistant-footer { color: var(--td-text-color-placeholder); font: var(--td-font-body-small); margin-top: 16px; }
+    .memory-stage { position: relative; width: min(100%, 920px); min-height: 224px; }
+    .memory-stage::before, .memory-stage::after { content: ''; position: absolute; border: 1px solid rgba(255,255,255,.9); border-radius: var(--td-radius-extraLarge); background: rgba(255,255,255,.24); backdrop-filter: blur(24px) saturate(112%); }
+    .memory-stage::before { inset: 18px 30px 2px 42px; transform: rotate(-2deg); background: rgba(255,255,255,.34); }
+    .memory-stage::after { inset: 2px 42px 18px 30px; transform: rotate(2deg); background: rgba(233,248,236,.46); }
+    .memory-core { position: absolute; inset: 0; z-index: 2; padding: 22px 26px; border: 1px solid rgba(255,255,255,.96); border-radius: var(--td-radius-extraLarge); background: rgba(255,255,255,.68); backdrop-filter: blur(30px) saturate(118%); box-shadow: var(--td-shadow-1); }
+    .memory-core > p { color: var(--td-text-color-secondary); font: var(--td-font-body-small); margin-bottom: 8px; }
+    .memory-core h2 { margin-bottom: 16px; }
+    .memory-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .memory-card { min-height: 102px; padding: 14px 16px; border: 1px solid rgba(7,192,95,.14); border-radius: var(--td-radius-large); background: rgba(255,255,255,.76); text-align: left; }
+    .memory-card svg { width: 20px; height: 20px; margin-bottom: 10px; color: var(--td-text-color-brand); }
+    .memory-card strong { display: block; font: var(--td-font-body-large); margin-bottom: 8px; }
+    .memory-card span { color: var(--td-text-color-secondary); font: var(--td-font-body-small); }
+    .memory-card { transition: background .25s, border-color .25s, transform .25s; }
+    .memory-card:hover { background: rgba(255,255,255,.92); border-color: rgba(7,192,95,.32); transform: translateY(-3px); }
+    .value-section { padding: 52px 0; border-top: 1px solid var(--td-component-stroke); border-bottom: 1px solid var(--td-component-stroke); background: rgba(255,255,255,.28); }
+    .value-heading { display: grid; grid-template-columns: 1fr 1fr; align-items: end; column-gap: 52px; margin-bottom: 30px; }
+    .value-heading .eyebrow { grid-column: 1 / -1; }
+    .value-heading h2 { max-width: 430px; margin-bottom: 0; }
+    .value-heading .body-copy { margin-bottom: 0; font: var(--td-font-body-medium); }
+    .value-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 18px; }
+    .value-item { padding: 24px; border: 1px solid rgba(255,255,255,.9); border-radius: var(--td-radius-extraLarge); background: rgba(255,255,255,.42); backdrop-filter: blur(26px) saturate(112%); }
+    .value-icon { width: 24px; height: 24px; margin-bottom: 16px; color: var(--td-text-color-secondary); }
+    .value-item h3 { font: var(--td-font-body-large); font-weight: 600; }
+    .value-item p { font: var(--td-font-body-medium); color: var(--td-text-color-secondary); margin-bottom: 0; }
+    .feature { padding: 72px 0; }
+    .feature + .feature { border-top: 1px solid var(--td-component-stroke); }
+    .feature-grid { display: grid; grid-template-columns: minmax(0,.8fr) minmax(0,1.2fr); align-items: center; gap: 52px; }
+    .feature.reversed { background: linear-gradient(135deg, var(--td-brand-color-light), rgba(255,255,255,.28) 60%); }
+    .feature.reversed .feature-grid { grid-template-columns: minmax(0,1.2fr) minmax(0,.8fr); }
+    .feature.reversed .feature-copy { order: 2; }
+    .feature-copy .body-copy { margin-bottom: 16px; }
+    .feature-copy .body-copy:last-child { margin-bottom: 0; }
+    .task-list { padding: 0; margin: 0; list-style: none; color: var(--td-text-color-secondary); font: var(--td-font-body-medium); }
+    .task-list li { padding: 12px 0; display: flex; align-items: start; gap: 12px; border-top: 1px solid var(--td-component-stroke); }
+    .task-list svg { width: 16px; height: 16px; margin-top: 3px; color: var(--td-text-color-brand); }
+    .feature-number { margin-left: auto; font: var(--td-font-body-small); font-family: var(--app-font-family-mono); color: var(--td-text-color-placeholder); }
+    .feature-visual { min-width: 0; }
+    .feature-visual > .placeholder { min-height: 380px; }
+    .stage-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+    .stage-tags span { border: 1px solid rgba(255,255,255,.9); background: rgba(255,255,255,.42); border-radius: var(--td-radius-round); color: var(--td-text-color-secondary); font: var(--td-font-body-small); padding: 4px 12px; }
+    .flow-labels { display: flex; align-items: center; gap: 8px; padding: 16px 24px; border-bottom: 1px solid var(--td-component-stroke); color: var(--td-text-color-secondary); font: var(--td-font-body-small); }
+    .flow-labels svg { width: 14px; height: 14px; color: var(--td-text-color-placeholder); }
+    .answer-layout { display: grid; grid-template-columns: minmax(0,1.45fr) minmax(0,1fr); }
+    .answer-panel { padding: 24px; }
+    .mock-label { color: var(--td-text-color-secondary); font: var(--td-font-body-medium); margin-bottom: 12px; }
+    .question-slot { background: var(--td-brand-color-light); padding: 12px; border-radius: var(--td-radius-medium); margin-bottom: 20px; }
+    .skeleton-lines { display: grid; gap: 10px; }
+    .skeleton-lines .ghost-line:nth-child(even) { width: 76%; }
+    .source-panel { padding: 24px 18px; border-left: 1px solid var(--td-component-stroke); }
+    .video-slot { aspect-ratio: 16 / 10; display: grid; place-items: center; background: var(--td-bg-color-secondarycontainer); border-radius: var(--td-radius-large); color: var(--td-text-color-placeholder); margin-bottom: 16px; }
+    .source-note { display: flex; flex-direction: column; gap: 8px; font: var(--td-font-body-small); color: var(--td-text-color-secondary); }
+    .source-note small { color: var(--td-text-color-placeholder); font: inherit; }
+    .method-panel { padding: 20px 24px 24px; border-top: 1px solid var(--td-component-stroke); }
+    .method-panel > .mock-label { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+    .method-panel > .mock-label svg { color: var(--td-text-color-brand); width: 16px; height: 16px; }
+    .method-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+    .method-card { padding: 14px; border: 1px solid rgba(255,255,255,.9); border-radius: var(--td-radius-large); background: rgba(255,255,255,.42); }
+    .method-card h3 { font: var(--td-font-body-medium); font-weight: 600; margin-bottom: 6px; }
+    .method-card p { font: var(--td-font-body-small); color: var(--td-text-color-secondary); margin-bottom: 0; }
+    .knowledge-layout { display: grid; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr); min-height: 330px; }
+    .graph-area { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: 18px; }
+    .knowledge-graph { width: 100%; height: 235px; }
+    .knowledge-graph line { stroke: var(--td-text-color-secondary); stroke-width: 1; opacity: .35; }
+    .knowledge-graph rect { fill: var(--td-bg-color-container); stroke: var(--td-component-stroke); stroke-width: 1; }
+    .knowledge-graph .central { fill: var(--td-brand-color-light); }
+    .knowledge-graph .gap-node { stroke-dasharray: 4 4; }
+    .knowledge-graph text { fill: var(--td-text-color-secondary); stroke: none; font-size: 14px; font-family: var(--td-font-family); }
+    .graph-note { text-align: center; color: var(--td-text-color-placeholder); font: var(--td-font-body-small); }
+    .reuse-panel { border-left: 1px solid var(--td-component-stroke); padding: 24px 18px; display: flex; flex-direction: column; justify-content: center; }
+    .document-slot { padding: 16px 0; border-top: 1px solid var(--td-component-stroke); }
+    .document-slot .mock-label { display: flex; align-items: center; gap: 8px; }
+    .document-slot svg { width: 16px; height: 16px; }
+    .feedback-layout { display: grid; grid-template-columns: minmax(0,.8fr) minmax(0,1.2fr); }
+    .question-stream { padding: 24px 18px; border-right: 1px solid var(--td-component-stroke); }
+    .question-stream .skeleton-lines { padding: 16px 0; border-top: 1px solid var(--td-component-stroke); }
+    .insight-panel { padding: 24px; }
+    .insight-row { padding: 12px 0; border-top: 1px solid var(--td-component-stroke); }
+    .insight-row .mock-label { margin-bottom: 10px; }
+    .end-action { padding-top: 30px; padding-bottom: 72px; }
+    .end-inner { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 24px; padding: 52px 24px; }
+    .end-inner p { margin: 0; font: var(--td-font-headline-medium); font-weight: 600; }
+    dialog { width: min(440px, calc(100% - 40px)); border: 1px solid rgba(255,255,255,.9); border-radius: var(--td-radius-extraLarge); background: rgba(255,255,255,.86); backdrop-filter: blur(24px) saturate(112%); padding: 30px; color: var(--td-text-color-primary); box-shadow: var(--td-shadow-2); }
+    dialog::backdrop { background: var(--td-text-color-disabled); backdrop-filter: blur(4px); }
+    dialog h2 { font: var(--td-font-headline-small); font-weight: 600; margin-bottom: 16px; }
+    dialog p { font: var(--td-font-body-medium); color: var(--td-text-color-secondary); }
+    dialog .dialog-note { padding-top: 16px; border-top: 1px solid var(--td-component-stroke); font: var(--td-font-body-small); }
+    .dialog-bottom { display: flex; justify-content: flex-end; margin-top: 24px; }
+    .reveal { transition: opacity .65s ease, transform .75s ease; }
+    .reveal.is-pending { opacity: 0; transform: translateY(18px); }
+    .hero-copy, .hero-visual { animation: enter .75s ease both; }
+    .hero-visual { animation-delay: .12s; }
+    .memory-stage { animation: memoryFloat 8s ease-in-out infinite; }
+    @keyframes enter { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+    @keyframes memoryFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+    @media (max-width: 1050px) {
+      .container { width: calc(100% - 76px); }
+      .hero-grid, .feature-grid, .feature.reversed .feature-grid { grid-template-columns: minmax(0,1fr); gap: 30px; }
+      .hero { min-height: auto; padding: 52px 0 44px; }
+      .hero-copy { max-width: 640px; }
+      .hero-copy .body-copy { max-width: 600px; }
+      .hero-visual { max-width: 900px; width: 100%; }
+      .feature.reversed .feature-copy { order: 0; }
+      .feature-copy { max-width: 640px; }
+      .feature-visual { width: 100%; max-width: 720px; }
+      .nav { gap: 20px; } .nav-links { gap: 16px; }
+    }
+    @media (max-width: 980px) {
+      .value-item { padding: 18px; }
+      .value-heading { grid-template-columns: 1fr; gap: 12px; }
+      .value-heading .eyebrow { margin: 0; }
+      .value-heading h2 { max-width: none; }
+    }
+    @media (max-width: 900px) {
+      .nav { flex-wrap: wrap; gap: 12px; }
+      .nav-actions { margin-left: auto; } .login { display: none; } .menu-button { display: inline-flex; }
+      .nav-links { display: none; margin: 0; flex-basis: 100%; padding-bottom: 16px; justify-content: space-between; gap: 12px; }
+      .nav-links.is-open { display: flex; order: 5; }
+    }
+    @media (max-width: 680px) {
+      .nav { gap: 8px; }
+      .nav-actions { gap: 8px; }
+      .container { width: calc(100% - 40px); }
+      .nav { gap: 8px; }
+      .wordmark { font: var(--td-font-headline-small); font-weight: 650; }
+      .nav .button { padding: 8px 12px; gap: 8px; }
+      .nav .button svg { display: none; }
+      .nav-links a { font: var(--td-font-body-small); }
+      h1 { font: var(--td-font-headline-medium); font-weight: 600; margin-bottom: 16px; }
+      h2 { font: var(--td-font-headline-small); font-weight: 600; margin-bottom: 16px; }
+      .hero { padding: 44px 0 36px; }
+      .hero-copy .eyebrow { margin-bottom: 12px; }
+      .hero-copy .body-copy, .feature-copy .body-copy { font: var(--td-font-body-medium); }
+      .hero-visual { min-height: 246px; }
+      .memory-stage { min-height: 246px; }
+      .memory-core { padding: 20px; }
+      .memory-core > p { margin-bottom: 12px; }
+      .memory-core h2 { margin-bottom: 16px; }
+      .memory-card { min-height: 120px; padding: 14px; }
+      .memory-card svg { margin-bottom: 12px; }
+      .value-section { padding: 38px 0; }
+      .value-heading { margin-bottom: 24px; }
+      .value-grid { grid-template-columns: minmax(0,1fr); gap: 0; }
+      .value-item { display: grid; grid-template-columns: 24px 1fr; column-gap: 16px; padding: 18px 0; border: 0; border-top: 1px solid var(--td-component-stroke); border-radius: 0; background: transparent; backdrop-filter: none; }
+      .value-icon { grid-row: 1 / 3; margin: 0; }
+      .value-item h3 { margin-bottom: 8px; }
+      .feature { padding: 38px 0; }
+      .feature-grid, .feature.reversed .feature-grid { gap: 24px; }
+      .feature-number { display: none; }
+      .feature-visual > .placeholder { min-height: 0; }
+      .flow-labels { padding: 12px; flex-wrap: wrap; gap: 6px; }
+      .answer-layout { grid-template-columns: minmax(0,1.25fr) minmax(0,1fr); }
+      .answer-panel { padding: 16px 12px; }
+      .source-panel { padding: 16px 12px; }
+      .method-panel { padding: 16px 12px; }
+      .method-grid { gap: 8px; }
+      .method-card { padding: 12px; }
+      .knowledge-layout { grid-template-columns: minmax(0,1fr); min-height: 0; }
+      .graph-area { padding: 12px; }
+      .knowledge-graph { height: 220px; }
+      .graph-note { margin: 0; }
+      .reuse-panel { border-left: 0; border-top: 1px solid var(--td-component-stroke); padding: 16px 12px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+      .reuse-panel > .mock-label { grid-column: 1 / -1; margin-bottom: 0; }
+      .document-slot { padding: 12px 0 0; }
+      .feedback-layout { grid-template-columns: minmax(0,.8fr) minmax(0,1.2fr); }
+      .question-stream { padding: 16px 12px; }
+      .insight-panel { padding: 16px 12px; }
+      .mock-label { font: var(--td-font-body-small); }
+      .stage-tags { gap: 6px; margin-top: 12px; }
+      .stage-tags span { padding: 4px 8px; }
+      .end-action { padding-top: 0; padding-bottom: 38px; }
+      .end-inner { padding: 38px 0; }
+      .end-inner p { font: var(--td-font-headline-small); font-weight: 600; }
+      dialog { padding: 24px; }
+    }
+    @media (max-width: 360px) {
+      h1 { font-size: 21px; line-height: 28px; font-weight: 600; }
+      .memory-cards { gap: 8px; }
+      .memory-card { padding: 10px; }
+      .memory-card strong { font: var(--td-font-body-medium); font-weight: 600; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation: none !important; transition: none !important; } .reveal.is-pending { opacity: 1; transform: none; } }
+    /* Feather reference: restrained section rhythm, clear type hierarchy and flat actions. */
+    body { background: var(--td-bg-color-container); }
+    .wordmark, h1, h2, h3 { letter-spacing: 0; }
+    .container { width: min(1200px, calc(100% - 64px)); }
+    .nav-shell { background: rgba(255,255,255,.86); }
+    .nav { gap: 24px; }
+    .nav .button { border-radius: var(--td-radius-extraLarge); }
+    .login { border: 1px solid var(--td-component-stroke); padding: 8px 16px; border-radius: var(--td-radius-extraLarge); }
+    .button { font-size: 16px; line-height: 24px; padding: 10px 24px; border-radius: var(--td-radius-extraLarge); }
+    .button-primary:hover { transform: none; box-shadow: none; }
+    .hero { min-height: auto; padding: 48px 0 40px; background: linear-gradient(180deg, var(--td-brand-color-light), rgba(255,255,255,.86)); }
+    .hero::before { opacity: .2; }
+    .hero-grid { gap: 32px; }
+    .hero-copy h1 { white-space: normal; max-width: 960px; font-size: 52px; line-height: 1.2; font-weight: 700; }
+    .hero-copy .body-copy { max-width: 640px; font-size: 20px; line-height: 30px; }
+    .eyebrow { font-size: 14px; line-height: 20px; font-weight: 600; }
+    .eyebrow::before { display: none; }
+    .memory-stage { animation: none; }
+    .memory-stage::before, .memory-stage::after { display: none; }
+    .memory-core { position: relative; padding: 18px 26px; box-shadow: none; }
+    .memory-core h2 { font-size: 24px; line-height: 32px; }
+    .memory-card { border: 0; border-left: 1px solid var(--td-component-stroke); border-radius: 0; background: transparent; }
+    .memory-card:first-child { border-left: 0; }
+    .memory-card:hover { background: rgba(255,255,255,.42); transform: none; }
+    .value-section { padding: 64px 0; border: 0; background: var(--td-bg-color-container); }
+    .value-heading { display: block; text-align: center; margin-bottom: 48px; }
+    .value-heading .eyebrow { justify-content: center; }
+    .value-heading h2 { max-width: none; margin-bottom: 20px; }
+    .value-heading .body-copy { max-width: 640px; margin: 0 auto; font-size: 16px; line-height: 24px; }
+    .value-item { border: 0; border-radius: 0; background: transparent; backdrop-filter: none; padding: 16px 24px; }
+    .value-item + .value-item { border-left: 1px solid var(--td-component-stroke); }
+    .value-item h3 { font-size: 20px; line-height: 28px; font-weight: 700; }
+    .feature { padding: 80px 0; background: var(--td-bg-color-secondarycontainer); }
+    .feature + .feature { border-top: 0; }
+    .feature.reversed { background: var(--td-bg-color-container); }
+    .feature-grid, .feature.reversed .feature-grid { gap: 64px; }
+    .feature-copy h2, .value-heading h2 { font-size: 36px; line-height: 44px; font-weight: 700; }
+    .feature-copy .body-copy { line-height: 26px; }
+    .task-list li { border: 0; padding: 10px 0; }
+    .placeholder { border-color: var(--td-component-stroke); }
+    .stage-tags span { border-color: var(--td-component-stroke); }
+    .end-action { padding: 64px 0; background: var(--td-brand-color-light); }
+    .end-inner { padding: 16px 24px; }
+    @media (max-width: 1050px) {
+      .feature-grid, .feature.reversed .feature-grid { gap: 40px; }
+      .feature-copy { max-width: 720px; }
+      .feature-visual { max-width: none; }
+    }
+    @media (max-width: 680px) {
+      .container { width: calc(100% - 40px); }
+      .nav { gap: 8px; }
+      .nav-actions { gap: 8px; }
+      .hero { padding: 48px 0; }
+      .hero-grid { gap: 32px; }
+      .hero-copy h1 { font-size: 32px; line-height: 42px; }
+      .hero-copy .body-copy { font-size: 16px; line-height: 26px; }
+      .feature, .value-section { padding: 48px 0; }
+      .feature-copy h2, .value-heading h2 { font-size: 28px; line-height: 36px; }
+      .value-heading { margin-bottom: 28px; }
+      .value-item, .value-item + .value-item { border-left: 0; border-top: 1px solid var(--td-component-stroke); padding: 20px 0; }
+      .memory-card { padding: 12px 8px; }
+      .memory-core { padding: 20px 12px; }
+      .memory-cards { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .memory-card { min-height: 0; display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 12px; padding: 14px 8px; border-left: 0; }
+      .memory-card + .memory-card { border-top: 1px solid var(--td-component-stroke); }
+      .memory-card svg { grid-row: 1 / 3; margin: 2px 0 0; }
+      .memory-card strong { font-size: 16px; line-height: 24px; margin-bottom: 4px; }
+      .memory-card span { grid-column: 2; }
+      .end-action { padding: 40px 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .reveal, .hero-copy, .hero-visual { animation: none; transition: none; }
+    }
+    @media (max-width: 360px) {
+      .hero-copy h1 { font-size: 28px; line-height: 38px; }
+    }
+  </style>
+</head>
+<body>
+  <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></symbol>
+    <symbol id="spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"/></symbol>
+    <symbol id="growth" viewBox="0 0 24 24"><path d="M4 20V10m8 10V5m8 15v-7M3 7l7-4 5 4 6-5"/></symbol>
+    <symbol id="chat" viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8l-5 3V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h6"/></symbol>
+    <symbol id="idea" viewBox="0 0 24 24"><path d="M9 18h6m-5 3h4m-6-7a6 6 0 1 1 8 0c-1 1-1 2-1 4H9c0-2 0-3-1-4Z"/></symbol>
+    <symbol id="person" viewBox="0 0 24 24"><circle cx="12" cy="7" r="3"/><path d="M5 21v-3a7 7 0 0 1 14 0v3"/></symbol>
+    <symbol id="book" viewBox="0 0 24 24"><path d="M12 5v16M3 4c3-1 6-1 9 1 3-2 6-2 9-1v15c-3-1-6-1-9 2-3-3-6-3-9-2V4Z"/></symbol>
+    <symbol id="learn" viewBox="0 0 24 24"><path d="m2 8 10-5 10 5-10 5L2 8Zm4 2v7c4 3 8 3 12 0v-7m4-2v8"/></symbol>
+    <symbol id="menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  </defs></svg>
+
+  <header class="nav-shell">
+    <nav class="nav container" aria-label="主导航">
+      <a class="wordmark" href="#top" aria-label="Vidsage 首页">Vidsage<span class="dot">.</span></a>
+      <div class="nav-links" id="nav-links"><a href="#value">产品价值</a><a href="#recall">学员辅导</a><a href="#relate">备课创作</a><a href="#reimagine">教学反馈</a></div>
+      <div class="nav-actions"><button class="login" data-action="login">登录</button><button class="button button-primary" data-action="start">开始体验<svg aria-hidden="true"><use href="#arrow"/></svg></button></div>
+      <button class="menu-button" aria-label="展开导航" aria-controls="nav-links" aria-expanded="false"><svg aria-hidden="true"><use href="#menu"/></svg></button>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">专为网课博主打造</p>
+          <h1 id="hero-title"><span>让你讲过的每一课<br><em class="hero-accent">持续创造价值</em></span></h1>
+          <button class="button button-primary" data-action="start">开始体验<svg aria-hidden="true"><use href="#arrow"/></svg></button>
+        </div>
+        <div class="hero-visual" id="value" aria-label="三大功能亮点：减少重复答疑、找到下一次创作方向、持续拉新">
+          <div class="memory-stage">
+            <div class="memory-core">
+              <h2>做好的一门课，<br>可以帮你做更多事</h2>
+              <div class="memory-cards">
+                <div class="memory-card"><svg aria-hidden="true"><use href="#chat"/></svg><strong>减少重复答疑</strong><span>AI 根据课程内容回答高频问题，附上对应视频和时间点，让你少花时间反复解释。</span></div>
+                <div class="memory-card"><svg aria-hidden="true"><use href="#idea"/></svg><strong>找到下一次创作方向</strong><span>从学员反复提出的问题中，发现需要补充的讲义、值得重讲的知识点，以及下一门课的选题。</span></div>
+                <div class="memory-card"><svg aria-hidden="true"><use href="#growth"/></svg><strong>持续拉新</strong><span>从已有课程中提取知识卡片、FAQ 和短视频脚本，为日常发布提供素材，让潜在学员看见你的专业能力。</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="feature" id="recall" aria-labelledby="recall-title">
+      <div class="container feature-grid">
+        <div class="feature-copy"><p class="eyebrow">学员辅导<span class="feature-number">01 / 03</span></p><h2 id="recall-title">熟悉你的教学，<br>做好学员辅导</h2><p class="body-copy">Vidsage 结合课程内容、你的讲解方式和学员的学习情况，帮你提供更有针对性的课后辅导。</p><ul class="task-list"><li><svg aria-hidden="true"><use href="#arrow"/></svg>制定学习计划</li><li><svg aria-hidden="true"><use href="#arrow"/></svg>通过章节与主题找到所需内容</li><li><svg aria-hidden="true"><use href="#arrow"/></svg>回答问题，定位原视频</li><li><svg aria-hidden="true"><use href="#arrow"/></svg>匹配教学方法，为学员定制练习与巩固课件</li></ul></div>
+        <div class="feature-visual">
+          <figure class="placeholder" data-screenshot="learner-support" aria-label="学员辅导界面占位：问答与视频出处，以及按学习情况匹配教学方法的设计示意">
+            <div class="window-top"><i></i><i></i><i></i><span>Vidsage / 学员辅导</span><span class="preview-label">截图占位</span></div>
+            <div class="flow-labels"><span>学员提问</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>课程回答</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>视频出处</span></div>
+            <div class="answer-layout"><div class="answer-panel"><div class="question-slot"><p class="mock-label">学员的问题</p><div class="ghost-line" aria-hidden="true"></div></div><p class="mock-label">沿用你的讲解方式回答</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div><div class="ghost-line"></div><div class="ghost-line"></div></div></div><div class="source-panel"><p class="mock-label">对应课程视频</p><div class="video-slot"><svg aria-hidden="true"><use href="#image"/></svg></div><div class="source-note"><span>回到相关视频与时间点</span><small>界面示意 · 待替换真实截图</small></div></div></div>
+            <div class="method-panel">
+              <p class="mock-label"><svg aria-hidden="true"><use href="#learn"/></svg>根据学习情况，匹配巩固方式</p>
+              <div class="method-grid">
+                <article class="method-card"><h3>费曼学习法</h3><p>用自己的话讲清概念，再尝试迁移应用。</p></article>
+                <article class="method-card"><h3>最近发展区习题课</h3><p>结合真实答题或作品证据，安排针对性练习。</p></article>
+                <article class="method-card"><h3>工作坊式教学</h3><p>围绕实际任务，边操作边学习。</p></article>
+                <article class="method-card"><h3>螺旋课程</h3><p>分阶段复习，逐步加深理解。</p></article>
+              </div>
+            </div>
+          </figure>
+          <div class="stage-tags" aria-label="学员辅导能力"><span>视频定位</span><span>学习计划</span><span>内容总结</span><span>章节导航</span></div>
+        </div>
+      </div>
+    </section>
+    <section class="feature reversed" id="relate" aria-labelledby="relate-title">
+      <div class="container feature-grid">
+        <div class="feature-copy"><p class="eyebrow">备课创作<span class="feature-number">02 / 03</span></p><h2 id="relate-title">提炼课程知识，<br>支持备课创作</h2><p class="body-copy">Vidsage 将课程中的概念、实体、案例、方法论和洞察整理成 Wiki 与知识图谱，帮你看清知识之间的联系，发现课程体系中需要补充的内容。</p><p class="body-copy">将已有知识用于复习资料与内容初稿，减少备课创作时间。</p></div>
+        <div class="feature-visual">
+          <figure class="placeholder" data-screenshot="knowledge-reuse" aria-label="知识图谱与内容复用截图占位示意">
+            <div class="window-top"><i></i><i></i><i></i><span>Vidsage / 课程知识</span><span class="preview-label">截图占位</span></div>
+            <div class="knowledge-layout"><div class="graph-area"><svg class="knowledge-graph" viewBox="0 0 340 240" role="img" aria-label="五类课程知识与待补充内容的关系示意"><line x1="170" y1="105" x2="64" y2="38"/><line x1="170" y1="105" x2="272" y2="38"/><line x1="170" y1="105" x2="62" y2="154"/><line x1="170" y1="105" x2="276" y2="154"/><line x1="170" y1="105" x2="170" y2="213"/><line x1="272" y1="38" x2="276" y2="154"/><rect class="central" x="131" y="85" width="78" height="40" rx="9"/><rect x="29" y="20" width="70" height="36" rx="9"/><rect x="237" y="20" width="70" height="36" rx="9"/><rect x="27" y="136" width="70" height="36" rx="9"/><rect x="237" y="136" width="78" height="36" rx="9"/><rect class="gap-node" x="124" y="195" width="92" height="36" rx="9"/><text x="170" y="110" text-anchor="middle">概念</text><text x="64" y="43" text-anchor="middle">实体</text><text x="272" y="43" text-anchor="middle">案例</text><text x="62" y="159" text-anchor="middle">洞察</text><text x="276" y="159" text-anchor="middle">方法论</text><text x="170" y="218" text-anchor="middle">待补充内容</text></svg><p class="graph-note">关系示意 · 待替换真实截图</p></div><div class="reuse-panel"><p class="mock-label">复用为新的内容</p><div class="document-slot"><p class="mock-label"><svg aria-hidden="true"><use href="#book"/></svg>复习资料</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div></div><div class="document-slot"><p class="mock-label"><svg aria-hidden="true"><use href="#idea"/></svg>内容初稿</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div></div></div></div>
+          </figure>
+        </div>
+      </div>
+    </section>
+    <section class="feature" id="reimagine" aria-labelledby="reimagine-title">
+      <div class="container feature-grid">
+        <div class="feature-copy"><p class="eyebrow">教学反馈<span class="feature-number">03 / 03</span></p><h2 id="reimagine-title">汇总学员提问，<br>找准教学重点</h2><p class="body-copy">Vidsage 自动汇总分析学员提问、归纳高频问题，并关联对应课程，帮你发现：</p><ul class="task-list"><li><svg aria-hidden="true"><use href="#arrow"/></svg>需要重讲的知识点</li><li><svg aria-hidden="true"><use href="#arrow"/></svg>值得补充的资料</li><li><svg aria-hidden="true"><use href="#arrow"/></svg>新的学习需求</li></ul></div>
+        <div class="feature-visual">
+          <figure class="placeholder" data-screenshot="teaching-feedback" aria-label="学员提问自动归纳与课程关联截图占位示意">
+            <div class="window-top"><i></i><i></i><i></i><span>Vidsage / 教学反馈</span><span class="preview-label">截图占位</span></div>
+            <div class="flow-labels"><span>分散提问</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>AI 自动归纳</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>关联课程</span></div>
+            <div class="feedback-layout"><div class="question-stream"><p class="mock-label">学员提问</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div></div><div class="insight-panel"><p class="mock-label">AI 自动整理</p><div class="insight-row"><p class="mock-label">高频问题</p><div class="ghost-line" aria-hidden="true"></div></div><div class="insight-row"><p class="mock-label">需要重讲的知识点</p><div class="ghost-line" aria-hidden="true"></div></div><div class="insight-row"><p class="mock-label">新的学习需求</p><div class="ghost-line" aria-hidden="true"></div></div><p class="asset-note">界面示意 · 待替换真实截图</p></div></div>
+          </figure>
+        </div>
+      </div>
+    </section>
+  </main>
+  <dialog id="preview-dialog" aria-labelledby="dialog-title"><h2 id="dialog-title">开始构建我的课程资产</h2><p id="dialog-copy">准备好你的课程内容，开始沉淀课程资产。</p><p class="dialog-note">当前为高保真设计预览，正式入口将在页面确认后接入。</p><div class="dialog-bottom"><button class="button button-primary" id="dialog-close">继续浏览</button></div></dialog>
+  <script>
+    const dialog = document.getElementById('preview-dialog');
+    document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => {
+      window.top.location.href = 'http://127.0.0.1/login';
+    }));
+    document.getElementById('dialog-close').addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', event => { if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close(); } });
+    const menu = document.querySelector('.menu-button');
+    menu.addEventListener('click', () => { const open = menu.getAttribute('aria-expanded') !== 'true'; menu.setAttribute('aria-expanded', String(open)); menu.setAttribute('aria-label', open ? '收起导航' : '展开导航'); document.getElementById('nav-links').classList.toggle('is-open', open); });
+    document.querySelectorAll('.nav-links a').forEach(link => link.addEventListener('click', event => {
+      event.preventDefault();
+      menu.setAttribute('aria-expanded', 'false');
+      menu.setAttribute('aria-label', '展开导航');
+      document.getElementById('nav-links').classList.remove('is-open');
+      history.pushState(null, '', link.getAttribute('href'));
+      requestAnimationFrame(() => document.querySelector(link.getAttribute('href')).scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'}));
+    }));
+    const sectionObserver = new IntersectionObserver(entries => {
+      entries.filter(entry => entry.isIntersecting).forEach(entry => {
+        document.querySelectorAll('.nav-links a').forEach(link => {
+          if (link.getAttribute('href') === '#' + entry.target.id) link.setAttribute('aria-current', 'location');
+          else link.removeAttribute('aria-current');
+        });
+      });
+    }, { rootMargin: '-104px 0px -45% 0px' });
+    document.querySelectorAll('.hero, #value, .feature').forEach(section => sectionObserver.observe(section));
+
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    if ('IntersectionObserver' in window) {
+      const revealObserver = new IntersectionObserver(entries => entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.remove('is-pending');
+          revealObserver.unobserve(entry.target);
+        }
+      }), { threshold: .08 });
+      document.querySelectorAll('.value-heading, .value-item, .feature-copy, .feature-visual, .end-inner').forEach(element => {
+        element.classList.add('reveal');
+        if (!reducedMotion.matches && element.getBoundingClientRect().top > innerHeight) element.classList.add('is-pending');
+        revealObserver.observe(element);
+      });
+      reducedMotion.addEventListener('change', () => {
+        if (reducedMotion.matches) document.querySelectorAll('.is-pending').forEach(element => element.classList.remove('is-pending'));
+      });
+    }
+  </script>
+</body>
+</html>
+

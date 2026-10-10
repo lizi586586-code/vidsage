@@ -1201,7 +1201,7 @@ const gotopage = async (path: string) => {
         // 清理所有状态和本地存储
         authStore.logout();
         MessagePlugin.success(t('menu.logoutSuccess'));
-        router.push('/login');
+        router.replace('/');
         return;
     } else {
         if (path === 'ai-chat') {

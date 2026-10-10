@@ -352,6 +352,7 @@ func autoMigrateLocalDB(db *gorm.DB) error {
 		&model.TrainingOrchestrationCurrent{},
 		&model.MeetingOrchestrationJob{},
 		&model.MeetingOrchestrationCurrent{},
+		&model.OpenMAICClassroom{},
 	)
 }
 

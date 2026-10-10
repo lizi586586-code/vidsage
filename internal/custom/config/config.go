@@ -26,6 +26,7 @@ type Config struct {
 	Training              TrainingConfig
 	MeetingPromptDir      string
 	MeetingTimeoutSeconds int
+	OpenMAICBridgeSecret  string
 	Worker                WorkerConfig
 }
 
@@ -348,6 +349,7 @@ func Load() *Config {
 		},
 		MeetingPromptDir:      getEnv("CUSTOM_MEETING_PROMPT_DIR", ""),
 		MeetingTimeoutSeconds: getEnvInt("CUSTOM_MEETING_TIMEOUT_SECONDS", 1200),
+		OpenMAICBridgeSecret:  getEnv("OPENMAIC_BRIDGE_SECRET", ""),
 		Worker: WorkerConfig{
 			PollIntervalSeconds:    getEnvInt("CUSTOM_WORKER_POLL_INTERVAL", 1),
 			MaxAttempts:            getEnvInt("CUSTOM_WORKER_MAX_ATTEMPTS", 3),

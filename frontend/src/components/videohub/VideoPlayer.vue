@@ -1,6 +1,6 @@
 <template>
   <section ref="playerRoot" class="video-player">
-    <video ref="video" :src="src" :poster="poster" preload="metadata" @loadedmetadata="onLoaded" @timeupdate="onTimeUpdate" @play="playing = true" @pause="playing = false" @error="hasError = true" @click="togglePlayback" />
+    <video ref="video" :src="src" :poster="poster" preload="metadata" @loadedmetadata="onLoaded" @timeupdate="onTimeUpdate" @play="onPlay" @pause="playing = false" @error="hasError = true" @click="togglePlayback" />
     <button v-if="!playing && !hasError" class="video-player__center-toggle" type="button" aria-label="播放" @click.stop="togglePlayback">
       <t-icon name="play" />
     </button>
@@ -37,7 +37,7 @@ const props = withDefaults(defineProps<{ src: string; poster?: string; title?: s
   subtitles: () => [],
   durationHint: 0,
 })
-const emit = defineEmits<{ timeupdate: [seconds: number] }>()
+const emit = defineEmits<{ timeupdate: [seconds: number]; play: [] }>()
 const video = ref<HTMLVideoElement | null>(null)
 const playerRoot = ref<HTMLElement | null>(null)
 const playing = ref(false)
@@ -88,6 +88,11 @@ function onLoaded() {
 function onTimeUpdate() {
   currentSeconds.value = video.value?.currentTime || 0
   emit('timeupdate', currentSeconds.value)
+}
+
+function onPlay() {
+  playing.value = true
+  emit('play')
 }
 
 async function togglePlayback() {

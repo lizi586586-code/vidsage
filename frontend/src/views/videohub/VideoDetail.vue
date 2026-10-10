@@ -26,7 +26,7 @@
       <template v-else>
         <div ref="layout" class="video-detail-page__layout">
           <section ref="left" class="video-detail-page__left">
-            <VideoPlayer ref="player" :src="video.play_url || video.video_url" :poster="video.cover_url || video.poster_url" :title="video.title" :chapter-label="currentChapterLabel" :duration-hint="video.durationSeconds" :subtitles="video.subtitles" @timeupdate="currentSeconds = $event" />
+            <VideoPlayer ref="player" :src="video.play_url || video.video_url" :poster="video.cover_url || video.poster_url" :title="video.title" :chapter-label="currentChapterLabel" :duration-hint="video.durationSeconds" :subtitles="video.subtitles" @timeupdate="currentSeconds = $event" @play="recordRecentlyPlayedCourse(authStore.user?.id || '', video.id)" />
             <ChapterNavigation :video="video" :current-seconds="currentSeconds" :content-state="content.outline" :is-generating="outlineGenerating" :is-processing-failed="outlineFailed" :is-retrying="retryingStage === 'outline'" @reload="reloadOutline" @retry="retryContentModule('outline')" @seek="seekTo" />
           </section>
           <aside ref="right" class="video-detail-page__right">
@@ -59,9 +59,12 @@ import AiAssistant from '@/components/videohub/AiAssistant.vue'
 import SmartSummary from '@/components/videohub/SmartSummary.vue'
 import RelatedKnowledge from '@/components/videohub/RelatedKnowledge.vue'
 import ProcessingStatus from '@/components/videohub/ProcessingStatus.vue'
+import { useAuthStore } from '@/stores/auth'
+import { recordRecentlyPlayedCourse } from '@/api/videohub/recentlyPlayedCourses'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const player = ref<InstanceType<typeof VideoPlayer> | null>(null)
 const processingStatus = ref<InstanceType<typeof ProcessingStatus> | null>(null)
 const page = ref<HTMLElement | null>(null)

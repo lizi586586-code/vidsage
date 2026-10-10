@@ -193,6 +193,23 @@ test('uses the configured resource tenant for Agent requests', () => {
   assert.equal('scope' in request.body, false)
 })
 
+test('pins the classroom skill on a reinforcement request', () => {
+  const request = buildChatRequest(
+    {
+      scope: 'video',
+      agent_id: 'vidsage',
+      agent_enabled: true,
+      skill_names: ['openmaic-classroom'],
+      knowledge_base_ids: ['kb-1'],
+      knowledge_ids: ['video-1'],
+    },
+    '生成巩固课程',
+    'jwt-token',
+  )
+
+  assert.deepEqual(request.body.skill_names, ['openmaic-classroom'])
+})
+
 test('removes the configured fallback agent for an unselected auto-routed turn', () => {
   const scope = resolveChatScopeAgent(
     {

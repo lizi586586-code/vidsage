@@ -33,7 +33,7 @@
       <div class="video-list-page__footer">已展示全部视频</div>
     </template>
     <UploadModal v-model:visible="uploadVisible" :after-upload="refreshVideos" />
-    <AiAssistant v-if="playableVideos.length" :current-video="globalScopeVideo" :global-mode="true" @navigate="navigateToEvidence" />
+    <AiAssistant :current-video="globalScopeVideo" :global-mode="true" @navigate="navigateToEvidence" />
   </main>
 </template>
 

@@ -10,6 +10,7 @@ export interface ChatRequestScope {
   knowledge_base_ids: string[]
   knowledge_ids: string[]
   tenant_id?: string | number
+  skill_names?: string[]
 }
 
 /** Automatic routing is enabled only when the user has not selected an agent. */
@@ -62,6 +63,7 @@ export function buildChatRequest(
       auto_route: scope.auto_route ?? false,
       ...(scope.agent_id ? { agent_id: scope.agent_id } : {}),
       ...(numericSourceTenantId ? { agent_source_tenant_id: numericSourceTenantId } : {}),
+      ...(scope.skill_names?.length ? { skill_names: scope.skill_names } : {}),
       disable_title: true,
       channel: 'web',
     },

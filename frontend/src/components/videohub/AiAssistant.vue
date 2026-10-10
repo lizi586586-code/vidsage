@@ -11,7 +11,8 @@
           </t-button>
         </header>
         <div ref="messageArea" class="assistant-messages">
-          <div v-for="(message, messageIndex) in messages" :key="message.id" :class="['assistant-message', `assistant-message--${message.sender}`, { 'assistant-message--welcome': message.id.startsWith('welcome-') }]">
+          <template v-for="(message, messageIndex) in messages" :key="message.id">
+          <div v-if="!isReinforcementReply(message, messageIndex)" :class="['assistant-message', `assistant-message--${message.sender}`, { 'assistant-message--welcome': message.id.startsWith('welcome-') }]">
             <AgentStreamDisplay
               v-if="shouldUseNativeAgentDisplay(message)"
               :session="toNativeAgentSession(message)"
@@ -40,17 +41,27 @@
                   :tabindex="canEditMessage(message, messageIndex) ? 0 : undefined"
                   @click="canEditMessage(message, messageIndex) && startMessageEdit(message)"
                   @keydown.enter.prevent="canEditMessage(message, messageIndex) && startMessageEdit(message)"
-                >{{ message.text }}</p>
+                >{{ visibleQuestion(message.text) }}</p>
                 </div>
               </template>
             </template>
             <p v-else-if="message.text"><template v-for="(part, index) in splitTimestamps(message.text, message.evidenceLinks)" :key="index"><button v-if="part.seconds !== undefined" class="timestamp" type="button" @click="selectTimestamp(part)">{{ part.text }}</button><template v-else>{{ part.text }}</template></template></p>
             <small v-else-if="message.activityText" class="assistant-activity">{{ message.activityText }}</small>
           </div>
-          <div v-if="isGenerating && !streamingAssistantVisible" class="assistant-loading"><t-loading size="small" /> 正在整合视频知识...</div>
+          <div v-if="isFirstReviewRequest(messages, messageIndex)" class="assistant-review-reply">
+            <ReviewMaterialReply :request-id="reviewRequestId(message.text)" :user-id="authStore.user?.id || ''"
+              :initial-task="classroomResult" :video="classroomResult?.request_id === reviewRequestId(message.text) ? classroomVideo || (!globalMode ? currentVideo : null) : !globalMode ? currentVideo : null" @status="updateStatus" />
+          </div>
+          </template>
+          <div v-if="isGenerating && !streamingAssistantVisible && !isReinforcementInstruction(lastUserQuery)" class="assistant-loading"><t-loading size="small" /> 正在整合视频知识...</div>
+          <ReviewMaterialReply v-if="classroomResult && !messages.some(message => reviewRequestId(message.text) === classroomResult?.request_id)"
+            :request-id="classroomResult.request_id" :user-id="authStore.user?.id || ''" :initial-task="classroomResult"
+            :video="classroomVideo || (!globalMode ? currentVideo : null)" @status="updateStatus" />
+          <ReviewCourseChooser v-if="choosingCourse" v-model="selectedCourseId" :courses="courses" :recent-course-ids="recentCourseIds" :loading="loadingCourses"
+            :error="courseError" :busy="preparingClassroom" @confirm="confirmCourse" @cancel="cancelCourse" @retry="loadCourses" />
         </div>
-        <div class="assistant-suggestions"><button v-for="item in suggestions" :key="item" type="button" @click="send(item)">{{ item }}</button></div>
       </section>
+      <ReviewSuggestions class="assistant-suggestions" :items="suggestions" :disabled="isGenerating || preparingClassroom" @select="selectSuggestion" />
       <form class="assistant-composer" @submit.prevent="send(input)">
         <div class="assistant-composer__body">
           <textarea
@@ -91,7 +102,7 @@ const assistantSessionCache = new Map<string, unknown>()
 </script>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { createChatTurn, loadChatSession } from '@/api/videohub/chat'
@@ -103,6 +114,12 @@ import { useSettingsStore } from '@/stores/settings'
 import { sanitizeMarkdownHTML } from '@/utils/security'
 import { configureMarkedForChatMarkdown, renderChatMarkdown } from '@/utils/chatMarkdownRenderer'
 import { shouldAutoRoute } from '@/api/videohub/chatRequest'
+import { isFirstReviewRequest, isReviewIntent, reviewRequestId, visibleReviewQuestion } from '@/api/videohub/reviewMaterials'
+import { useReviewCourse } from '@/composables/useReviewCourse'
+import ReviewMaterialReply from './ReviewMaterialReply.vue'
+import ReviewCourseChooser from './ReviewCourseChooser.vue'
+import ReviewSuggestions from './ReviewSuggestions.vue'
+import { useAuthStore } from '@/stores/auth'
 import { learningQuotes, nextLearningQuote } from '@/utils/learningQuotes'
 import {
   assistantRecoveryKey,
@@ -117,30 +134,50 @@ type TimestampPart = { text: string; seconds?: number; videoId?: string }
 const props = withDefaults(defineProps<{ currentVideo: VideoData; currentTime?: number; externalQuery?: string; globalMode?: boolean }>(), { currentTime: 0, externalQuery: '', globalMode: false })
 const emit = defineEmits<{ seek: [seconds: number]; navigate: [videoId: string, seconds: number] }>()
 const settingsStore = useSettingsStore()
+const authStore = useAuthStore()
 const expanded = ref(false), input = ref(''), isGenerating = ref(false), messageArea = ref<HTMLElement | null>(null)
 const messages = ref<StreamingChatMessage[]>([])
 const activeSession = ref<ChatSession | null>(null)
 const lastUserQuery = ref('')
 const editingMessageId = ref('')
 const editingMessageText = ref('')
-const globalSuggestions = ['帮我总结一下全部视频的核心观点', '最近上传了哪些重要视频？', '帮我找关于培训内容的视频']
-const singleSuggestions = ['总结这段视频的核心观点', '有哪些值得记录的知识点？', '给出三个可执行建议']
+const globalSuggestions = ['巩固学习', '帮我总结一下全部视频的核心观点', '给出三个可执行建议']
+const singleSuggestions = ['巩固学习', '总结这段视频的核心观点', '给出三个可执行建议']
 const suggestions = props.globalMode ? globalSuggestions : singleSuggestions
 let consumedExternalQuery = ''
 const streamingAssistantId = ref('')
 const stopCurrentTurn = ref<null | (() => Promise<void>)>(null)
 const recoveryStorage = getChatRecoveryStorage()
 const welcomeQuote = ref<string>(learningQuotes[0])
+const classroomStorageKey = computed(() => `openmaic:${authStore.user?.id || ''}:${props.globalMode ? 'global' : props.currentVideo.id}`)
+const { choosingCourse, loadingCourses, courseError, courses, selectedCourseId, preparingClassroom,
+  classroomResult, classroomVideo, recentCourseIds, askCourse, loadCourses, cancelCourse, confirmCourse, startForVideo, updateStatus } = useReviewCourse({
+  userId: computed(() => authStore.user?.id || ''), storageKey: classroomStorageKey, busy: isGenerating,
+  onStart: instruction => send(instruction, true),
+})
 
 const streamingAssistantVisible = computed(() => messages.value.some(message =>
   message.id === streamingAssistantId.value && Boolean(message.text || message.thinkingText || message.activityText),
 ))
-const firstQuestion = computed(() => messages.value.find(message => message.sender === 'user')?.text || '')
+const firstQuestion = computed(() => visibleQuestion(messages.value.find(message => message.sender === 'user')?.text || ''))
+
+// Presentation is derived from our own command, never from model output.
+function isReinforcementInstruction(text: string) {
+  return Boolean(reviewRequestId(text))
+}
+function visibleQuestion(text: string) {
+  return visibleReviewQuestion(text)
+}
+function isReinforcementReply(message: StreamingChatMessage, index: number) {
+  return message.sender === 'assistant' && !message.id.startsWith('error-') && !message.id.startsWith('welcome-') && isReinforcementInstruction(questionForMessage(index))
+}
 
 const answerRenderer = new marked.Renderer()
 configureMarkedForChatMarkdown()
 
-const sessionCacheKey = computed(() => props.globalMode ? 'global' : `video:${props.currentVideo.id}`)
+const sessionCacheKey = computed(() => `${authStore.user?.id || ''}:${props.globalMode ? 'global' : `video:${props.currentVideo.id}`}`)
+let scopeRevision = 0
+onUnmounted(() => { scopeRevision += 1; void stopCurrentTurn.value?.() })
 
 function welcome(video: VideoData): StreamingChatMessage {
   return {
@@ -207,7 +244,7 @@ function hasAnswerOutputAfter(index: number): boolean {
   }))
 }
 function canEditMessage(message: StreamingChatMessage, index: number): boolean {
-  return message.sender === 'user' && !isGenerating.value && !hasAnswerOutputAfter(index)
+  return message.sender === 'user' && !isReinforcementInstruction(message.text) && !isGenerating.value && !hasAnswerOutputAfter(index)
 }
 
 function shouldShowVideoTitle(message: StreamingChatMessage, index: number): boolean {
@@ -263,6 +300,18 @@ function showToolMessage(label: string) {
   MessagePlugin.info(`${label}入口暂未接入`)
 }
 
+async function startKnowledgeReinforcement() {
+  if (isGenerating.value || preparingClassroom.value) return
+  expanded.value = true
+  if (props.globalMode) await askCourse()
+  else await startForVideo(props.currentVideo)
+  await scrollBottom()
+}
+function selectSuggestion(item: string) {
+  if (item === '巩固学习') void startKnowledgeReinforcement()
+  else void send(item)
+}
+
 function restoreCachedSession() {
   const cached = assistantSessionCache.get(sessionCacheKey.value) as ChatSession | undefined
   if (cached) {
@@ -275,7 +324,7 @@ function restoreCachedSession() {
   messages.value = [welcome(props.currentVideo)]
   if (!pending) return
   if (!pending.sessionId) {
-    input.value = pending.question
+    input.value = isReinforcementInstruction(pending.question) ? '' : pending.question
     expanded.value = true
     return
   }
@@ -316,8 +365,11 @@ function recoveredSessionFromPending(sessionId: string, pendingQuestion: string)
 
 async function restorePersistedSession(pending: NonNullable<ReturnType<typeof readChatRecovery>>) {
   const key = assistantRecoveryKey(props.globalMode ? 'global' : 'video', props.currentVideo.id)
+  const scopeKey = sessionCacheKey.value
+  const revision = scopeRevision
   try {
     const loaded = await loadChatSession(recoveredSessionFromPending(pending.sessionId!, pending.question))
+    if (scopeKey !== sessionCacheKey.value || revision !== scopeRevision) return
     if (!loaded.messages.some(message => message.sender === 'user' && message.text.trim() === pending.question.trim())) {
       loaded.messages = [
         ...loaded.messages,
@@ -330,7 +382,8 @@ async function restorePersistedSession(pending: NonNullable<ReturnType<typeof re
     clearChatRecovery(recoveryStorage, key)
     void scrollBottom()
   } catch {
-    input.value = pending.question
+    if (scopeKey !== sessionCacheKey.value || revision !== scopeRevision) return
+    input.value = isReinforcementInstruction(pending.question) ? '' : pending.question
     expanded.value = true
   }
 }
@@ -365,8 +418,13 @@ async function resendEditedMessage() {
   cancelMessageEdit()
   await send(value)
 }
-async function send(value: string) {
+async function send(value: string, reinforcement = false) {
   const question = value.trim(); if (!question || isGenerating.value) return
+  if (!reinforcement && isReviewIntent(question)) { await startKnowledgeReinforcement(); return }
+  if (!reinforcement && preparingClassroom.value) return
+  const scopeKey = sessionCacheKey.value
+  const revision = scopeRevision
+  const isCurrentScope = () => scopeKey === sessionCacheKey.value && revision === scopeRevision
   lastUserQuery.value = question
   const recoveryKey = assistantRecoveryKey(props.globalMode ? 'global' : 'video', props.currentVideo.id)
   writeChatRecovery(recoveryStorage, recoveryKey, {
@@ -384,6 +442,7 @@ async function send(value: string) {
   isGenerating.value = true; await scrollBottom()
   try {
     const updateStreamingMessage = (message: StreamingChatMessage) => {
+      if (!isCurrentScope()) return
       const target = messages.value.find(item => item.id === assistantId)
       if (!target) return
       Object.assign(target, message, { id: assistantId })
@@ -393,27 +452,32 @@ async function send(value: string) {
       currentVideo: props.currentVideo,
       currentTime: props.currentTime,
       globalMode: props.globalMode,
-      agentId: settingsStore.selectedAgentId,
-      agentEnabled: settingsStore.isAgentEnabled,
-      autoRoute: shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
-      agentSourceTenantId: settingsStore.selectedAgentSourceTenantId,
+      agentId: reinforcement ? undefined : settingsStore.selectedAgentId,
+      agentEnabled: reinforcement || settingsStore.isAgentEnabled,
+      autoRoute: reinforcement || shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
+      agentSourceTenantId: reinforcement ? undefined : settingsStore.selectedAgentSourceTenantId,
+      skillNames: reinforcement ? ['openmaic-classroom'] : undefined,
       session: activeSession.value || undefined,
-      onSessionCreated: materializeActiveSession,
+      onSessionCreated: session => { if (isCurrentScope()) materializeActiveSession(session) },
       onStreamMessage: updateStreamingMessage,
-      onStopReady: stop => { stopCurrentTurn.value = stop },
+      onStopReady: stop => { if (isCurrentScope()) stopCurrentTurn.value = stop; else void stop() },
     })
+    if (!isCurrentScope()) return
     activeSession.value = session
     cacheSession(session)
     messages.value = [welcome(props.currentVideo), ...session.messages]
     clearChatRecovery(recoveryStorage, recoveryKey)
   }
   catch (error) {
+    if (!isCurrentScope()) return
     const text = error instanceof Error ? error.message : '问答生成失败，请稍后重试'
     messages.value.push({ id: `error-${Date.now()}`, sender: 'assistant', text, timestamp: '' })
     MessagePlugin.error(text)
-  } finally { isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null; await scrollBottom() }
+  } finally { if (isCurrentScope()) { isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null; await scrollBottom() } }
 }
-watch([() => props.currentVideo.id, () => props.globalMode], () => {
+watch(sessionCacheKey, () => {
+  scopeRevision += 1
+  void stopCurrentTurn.value?.()
   input.value = ''; isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null
   if (expanded.value) rotateWelcomeQuote()
   restoreCachedSession()
@@ -683,35 +747,9 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
 
 .assistant-suggestions {
   flex: 0 0 auto;
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 0 16px 12px;
+  padding: 12px 16px;
 }
-
-.assistant-suggestions button {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  height: 20px;
-  min-height: 20px;
-  padding: 0 10px;
-  border: 1px solid var(--td-component-stroke);
-  border-radius: var(--td-radius-round);
-  background: var(--td-bg-color-container);
-  color: var(--td-text-color-secondary);
-  cursor: pointer;
-  font: var(--td-font-body-small);
-  white-space: nowrap;
-}
-
-.assistant-suggestions button:hover {
-  border-color: color-mix(in srgb, var(--td-brand-color) 30%, transparent);
-  background: var(--td-bg-color-container-hover);
-  color: var(--td-brand-color);
-}
+.assistant-review-reply { margin-bottom: 20px; }
 
 .assistant-composer {
   flex: 0 0 auto;

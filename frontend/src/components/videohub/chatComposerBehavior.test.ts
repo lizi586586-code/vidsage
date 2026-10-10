@@ -28,6 +28,9 @@ for (const scenario of cases) {
       const context = {
         input: { value: '' }, question: { value: '' }, followUp: { value: '' },
         expanded: { value: false }, isGenerating: { value: false },
+        preparingClassroom: { value: false }, isReviewIntent: () => false,
+        reviewRequestId: () => '', visibleReviewQuestion: (value: string) => value,
+        turnRevision: 0, scopeRevision: 0, sessionCacheKey: { value: 'test-scope' },
         lastUserQuery: { value: '' }, streamingAssistantId: { value: '' }, stopCurrentTurn: { value: null },
         activeSession: { value: session }, sessions: { value: [session] }, messages: { value: [] },
         props: { globalMode: true, currentVideo: { id: 'video' } },
@@ -62,3 +65,42 @@ for (const scenario of cases) {
     })
   }
 }
+
+test('reviewing a different course bypasses the old video scope and preserves the conversation scope for later questions', async () => {
+  const source = readFileSync(resolve(import.meta.dirname, '../../views/videohub/ChatView.vue'), 'utf8')
+  const method = source.match(/async function continueSession\(\) \{[\s\S]*?\n}/)?.[0]
+  assert.ok(method)
+  const original = {
+    id: 'old-video-session', type: 'video', scope: 'video', videoId: 'deleted-video',
+    videoTitle: '旧课程', videoCoverUrl: '/old-cover', tenantId: 'tenant', messages: [],
+  }
+  let submittedOptions: Record<string, unknown> = {}
+  const context = {
+    followUp: { value: 'confirmed-new-course-request' }, isGenerating: { value: false },
+    preparingClassroom: { value: false }, isReviewIntent: () => false,
+    reviewRequestId: () => 'new-course-request-id', turnRevision: 0,
+    activeSession: { value: original }, sessions: { value: [original] },
+    lastUserQuery: { value: '' }, streamingAssistantId: { value: '' }, stopCurrentTurn: { value: null },
+    settingsStore: { settings: {} }, recoveryStorage: null, CHAT_PAGE_RECOVERY_KEY: 'test',
+    createChatTurn: async (_: string, options: Record<string, unknown>) => {
+      submittedOptions = options
+      return { id: original.id, type: 'chat', scope: 'global', tenantId: 'tenant', messages: [{ sender: 'assistant', text: 'done' }] }
+    },
+    persistPendingQuestion: () => {}, clearChatRecovery: () => {}, shouldAutoRoute: () => false,
+    scrollBottom: async () => {}, pushStreamingPlaceholder: () => 'assistant', updateStreamingMessage: () => {},
+  }
+  const run = runInNewContext(`${ts.transpile(method, { target: ts.ScriptTarget.ES2022 })}\ncontinueSession`, context)
+  await run()
+  assert.equal(submittedOptions.globalMode, true)
+  assert.equal(submittedOptions.currentVideo, undefined)
+  assert.equal(submittedOptions.agentEnabled, true)
+  assert.deepEqual(Array.from(submittedOptions.skillNames as string[]), ['openmaic-classroom'])
+  assert.equal(context.activeSession.value.scope, 'video')
+  assert.equal(context.activeSession.value.type, 'video')
+  assert.equal(context.activeSession.value.videoId, 'deleted-video')
+  assert.equal(context.activeSession.value.videoTitle, '旧课程')
+  assert.equal(context.activeSession.value.videoCoverUrl, '/old-cover')
+  assert.equal(context.activeSession.value.tenantId, 'tenant')
+  assert.equal(context.sessions.value.length, 1)
+  assert.equal(context.isGenerating.value, false)
+})

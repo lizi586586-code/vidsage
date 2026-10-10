@@ -4,11 +4,15 @@ import { resolve } from 'node:path'
 import test from 'node:test'
 
 const componentSource = readFileSync(resolve(import.meta.dirname, 'AiAssistant.vue'), 'utf8')
+const suggestionsSource = readFileSync(resolve(import.meta.dirname, 'ReviewSuggestions.vue'), 'utf8')
+const replySource = readFileSync(resolve(import.meta.dirname, 'ReviewMaterialReply.vue'), 'utf8')
+const courseSource = readFileSync(resolve(import.meta.dirname, '../../composables/useReviewCourse.ts'), 'utf8')
+const reviewSource = readFileSync(resolve(import.meta.dirname, '../../api/videohub/reviewMaterials.ts'), 'utf8')
 
 test('video assistant suggestion chips trigger chat as plain buttons', () => {
   assert.match(
-    componentSource,
-    /<button\s+v-for="item in suggestions"[^>]*type="button"[^>]*@click="send\(item\)"/,
+    suggestionsSource,
+    /<button\s+v-for="item in items"[^>]*type="button"[^>]*@click="\$emit\('select', item\)"/,
   )
 })
 
@@ -21,7 +25,7 @@ test('video assistant clears the sent draft while keeping the composer editable 
   const input = componentSource.match(/<textarea\s+v-model="input"[^>]*>/)?.[0] || ''
   assert.ok(input)
   assert.doesNotMatch(input, /disabled|readonly/)
-  const send = componentSource.match(/async function send\(value: string\) \{[\s\S]*?\n}/)?.[0] || ''
+  const send = componentSource.match(/async function send\(value: string, reinforcement = false\) \{[\s\S]*?\n}/)?.[0] || ''
   assert.match(send, /if \(!question \|\| isGenerating\.value\) return/)
   assert.ok(send.indexOf('isGenerating.value) return') < send.indexOf("input.value = ''"))
   assert.match(send, /expanded\.value = true;\s*input\.value = ''/)
@@ -44,7 +48,31 @@ test('video assistant swaps the send action for an icon-only pause control while
   assert.match(componentSource, /<t-tooltip v-if="isGenerating" content="暂停生成"/)
   assert.match(componentSource, /aria-label="暂停生成" @click="pauseGeneration"/)
   assert.match(componentSource, /<t-icon name="pause-circle" \/>/)
-  assert.match(componentSource, /onStopReady: stop => \{ stopCurrentTurn\.value = stop \}/)
+  assert.match(componentSource, /onStopReady: stop => \{ if \(isCurrentScope\(\)\) stopCurrentTurn\.value = stop/)
+})
+
+test('video assistant exposes a knowledge reinforcement action that routes through the classroom skill', () => {
+  const template = componentSource.split('<script')[0]
+  assert.doesNotMatch(template, /chat-reinforce/)
+  assert.match(componentSource, /const singleSuggestions = \['巩固学习', '总结这段视频的核心观点', '给出三个可执行建议'\]/)
+  assert.doesNotMatch(componentSource, /有哪些值得记录的知识点/)
+  assert.match(reviewSource, /请使用 openmaic-classroom Skill/)
+  assert.match(reviewSource, /互动问答/)
+  assert.match(reviewSource, /互动白板/)
+  assert.match(componentSource, /async function startKnowledgeReinforcement\(\)/)
+  assert.match(courseSource, /prepareOpenMAICClassroom\(\{ video_id: video.id/)
+  assert.match(componentSource, /skillNames:\s*reinforcement \? \['openmaic-classroom'\]/)
+  assert.match(template, /<ReviewMaterialReply/)
+  assert.doesNotMatch(componentSource, /OPENMAIC_CLASSROOM_RESULT|parseClassroomResult/)
+  assert.match(replySource, /setTimeout\(\(\) => void refresh\(turn\), 5000\)/)
+  assert.match(replySource, /:is="presentation.href \? 'a' : 'div'"/)
+  assert.match(replySource, /:target="presentation.href \? '_blank' : undefined"/)
+  assert.match(template, /visibleQuestion\(message.text\)/)
+  assert.match(template, /!isReinforcementReply\(message, messageIndex\)/)
+  assert.match(reviewSource, /按照课程材料，课程要求以及你的学习偏好，为你定制复习材料/)
+  assert.match(reviewSource, /复习材料生成中，进度\$\{progress\}%/)
+  assert.match(replySource, /animation: review-shimmer/)
+  assert.match(replySource, /fetchOpenMAICClassroomStatus/)
 })
 
 test('video assistant disables protected image hydration in native agent display', () => {
@@ -77,8 +105,7 @@ test('video assistant gives welcoming text and compact suggestion buttons withou
   assert.match(welcomeStyle, /align-items:\s*flex-start/)
   assert.match(welcomeStyle, /min-height:\s*80px/)
   assert.doesNotMatch(welcomeStyle, /(?:^|;)\s*height:|overflow:\s*hidden/)
-  const buttonStyle = componentSource.match(/\.assistant-suggestions button\s*\{([^}]*)}/)?.[1] || ''
-  assert.match(buttonStyle, /height:\s*20px/)
+  const buttonStyle = suggestionsSource.match(/\.review-suggestions button\s*\{([^}]*)}/)?.[1] || ''
   assert.match(buttonStyle, /min-height:\s*20px/)
   assert.match(buttonStyle, /box-sizing:\s*border-box/)
   assert.match(buttonStyle, /flex:\s*0 0 auto/)
@@ -127,7 +154,7 @@ test('video citations use the shared navigation path for current and cross-video
 
 test('video assistant keeps the created session before streaming finishes', () => {
   assert.match(componentSource, /function materializeActiveSession\(session: ChatSession\)/)
-  assert.match(componentSource, /onSessionCreated: materializeActiveSession/)
+  assert.match(componentSource, /onSessionCreated: session => \{ if \(isCurrentScope\(\)\) materializeActiveSession\(session\)/)
 })
 
 test('video assistant persists and restores the current turn across a hard refresh', () => {
@@ -137,7 +164,7 @@ test('video assistant persists and restores the current turn across a hard refre
 })
 
 test('video assistant delegates automatic routing to the shared routing rule', () => {
-  assert.match(componentSource, /agentEnabled:\s*settingsStore\.isAgentEnabled,\s*autoRoute:\s*shouldAutoRoute\(settingsStore\.selectedAgentId,\s*settingsStore\.settings\.selectedAgentExplicit\)/)
+  assert.match(componentSource, /agentEnabled:\s*reinforcement \|\| settingsStore\.isAgentEnabled,\s*autoRoute:\s*reinforcement \|\| shouldAutoRoute\(settingsStore\.selectedAgentId,\s*settingsStore\.settings\.selectedAgentExplicit\)/)
 })
 
 test('video assistant keeps long conversations scrollable inside the viewport', () => {
@@ -149,12 +176,12 @@ test('video assistant keeps long conversations scrollable inside the viewport', 
 test('video assistant uses solid white surfaces instead of frosted backgrounds', () => {
   assert.match(componentSource, /\.assistant-frame\s*\{[^}]*background:\s*var\(--td-bg-color-container\)/s)
   assert.doesNotMatch(componentSource, /\.assistant-frame\s*\{[^}]*backdrop-filter:/s)
-  assert.match(componentSource, /\.assistant-suggestions button\s*\{[^}]*background:\s*var\(--td-bg-color-container\)/s)
+  assert.match(suggestionsSource, /\.review-suggestions button\s*\{[^}]*background:\s*var\(--td-bg-color-container\)/s)
 })
 
 test('video assistant expanded header shows only the first question without source labels', () => {
   assert.doesNotMatch(componentSource, /<strong>AI Assistant<\/strong>/)
-  assert.match(componentSource, /const firstQuestion = computed\(\(\) => messages\.value\.find\(message => message\.sender === 'user'\)\?\.text \|\| ''\)/)
+  assert.match(componentSource, /const firstQuestion = computed\(\(\) => visibleQuestion\(messages\.value\.find\(message => message\.sender === 'user'\)\?\.text \|\| ''\)\)/)
   assert.match(componentSource, /<span v-if="firstQuestion">\{\{ firstQuestion \}\}<\/span>/)
   assert.doesNotMatch(componentSource, /全局视频问答|围绕《\$\{currentVideo\.title\}》提问/)
   assert.match(componentSource, /\.assistant-drawer header \{[^}]*padding:\s*4px 8px/s)

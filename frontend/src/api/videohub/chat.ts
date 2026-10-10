@@ -89,6 +89,7 @@ interface SendOptions {
   agentEnabled?: boolean
   autoRoute?: boolean
   agentSourceTenantId?: string | null
+  skillNames?: string[]
   onMessage?: (message: ChatMessage) => void
   onStreamMessage?: (message: StreamingChatMessage) => void
   onSessionCreated?: (session: ChatSession) => void
@@ -366,6 +367,7 @@ function isVideohubSession(session: WeKnoraSession) {
 function visibleSessionTitle(title: string | undefined, fallback = '未命名会话') {
   const raw = String(title || '').trim()
   if (!raw) return fallback
+  if (raw.startsWith('请使用 openmaic-classroom Skill')) return '帮我定制复习材料'
   return raw
     .replace(/^全局视频问答\s*[:：]\s*/u, '')
     .replace(/^《[^》]+》\s*[:：]\s*/u, '')
@@ -472,7 +474,7 @@ async function createSession(question: string, scope: ScopeResponse): Promise<We
   // Keep scope/video ownership in the session metadata. The visible title is
   // only the user's question so the sidebar never exposes an internal source
   // label such as "全局视频问答".
-  const title = question.slice(0, 80)
+  const title = visibleSessionTitle(question).slice(0, 80)
   const res = await post<ApiEnvelope<WeKnoraSession>>('/api/v1/sessions', {
     title,
     description: sessionDescription(scope.session_meta || { scope: scope.scope }),
@@ -1043,6 +1045,12 @@ function sessionFromScope(session: WeKnoraSession, scope: ScopeResponse, message
   }
 }
 
+export async function createReviewChatSession(): Promise<ChatSession> {
+  const scope = await getScope({ globalMode: true })
+  const session = await createSession('巩固学习', scope)
+  return { id: session.id, title: '巩固学习', type: 'chat', time: nowLabel(), messages: [], scope: 'global', tenantId: normalizeTenantId(scope.tenant_id) || undefined }
+}
+
 export async function fetchSessions(): Promise<ChatSession[]> {
   try {
     const scope = await getScope({ globalMode: true })
@@ -1091,6 +1099,7 @@ export async function sendChatMessage(question: string, options: SendOptions = {
       ...(options.autoRoute !== undefined ? { auto_route: options.autoRoute } : {}),
       ...(options.agentId ? { agent_id: options.agentId } : {}),
       ...(options.agentEnabled !== undefined ? { agent_enabled: options.agentEnabled } : {}),
+      ...(options.skillNames?.length ? { skill_names: options.skillNames } : {}),
     }
     const session = await createSession(question, scope)
     const eventID = recordQuestionBestEffort(question, scope, session.id, options.currentVideo, options.currentTime)
@@ -1123,6 +1132,7 @@ export async function createChatTurn(question: string, options: TurnOptions = {}
       ...(options.agentId ? { agent_id: options.agentId } : {}),
       ...(options.agentEnabled !== undefined ? { agent_enabled: options.agentEnabled } : {}),
       ...(options.autoRoute !== undefined ? { auto_route: options.autoRoute } : {}),
+      ...(options.skillNames?.length ? { skill_names: options.skillNames } : {}),
       ...(sourceTenantID && sourceTenantID !== currentTenantID
         ? { agent_source_tenant_id: sourceTenantID }
         : {}),

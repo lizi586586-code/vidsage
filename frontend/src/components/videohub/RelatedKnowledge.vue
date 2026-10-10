@@ -13,13 +13,31 @@
       <template #action><t-button size="small" variant="outline" @click="emit('reload')">刷新</t-button></template>
     </t-empty>
     <template v-else>
-      <p class="native-wiki-graph__overview">{{ overview }}</p>
+      <header class="native-wiki-graph__header">
+        <div>
+          <div class="native-wiki-graph__eyebrow"><t-icon name="chart-bubble" size="15px" />原生 Wiki 关系</div>
+          <p class="native-wiki-graph__overview">{{ overview }}</p>
+        </div>
+        <t-tooltip content="适应视图" placement="top">
+          <button class="native-wiki-graph__fit" type="button" aria-label="适应图谱视图" :disabled="!chart" @click="fitGraph">
+            <t-icon name="focus" size="16px" />
+          </button>
+        </t-tooltip>
+      </header>
       <div v-if="graphLoading" class="native-wiki-graph__canvas-state"><t-loading text="正在加载原生 Wiki 图谱" /></div>
       <t-alert v-else-if="graphError" theme="error" :message="graphError">
         <template #operation><t-button size="small" variant="outline" @click="loadGraph">刷新</t-button></template>
       </t-alert>
       <t-empty v-else-if="!graph || graph.nodes.length <= 1" description="该摘要页暂未链接其他 Wiki 页面" />
-      <div v-else ref="chartElement" class="native-wiki-graph__canvas" aria-label="原生 Wiki 关联图谱" />
+      <div v-else class="native-wiki-graph__frame">
+        <div ref="chartElement" class="native-wiki-graph__canvas" aria-label="原生 Wiki 关联图谱" />
+        <div class="native-wiki-graph__legend" aria-label="Wiki 页面类型图例">
+          <span v-for="item in visibleLegendItems" :key="item.type" class="native-wiki-graph__legend-item">
+            <i :style="{ backgroundColor: item.color }" />{{ item.label }}
+          </span>
+        </div>
+        <span class="native-wiki-graph__hint">点击节点查看 Wiki 页面</span>
+      </div>
     </template>
   </section>
 </template>
@@ -54,6 +72,18 @@ const notGenerated = computed(() => props.contentState.status === 'not_generated
 const error = computed(() => props.contentState.status === 'error' ? props.contentState.error || '关联知识加载失败' : '')
 const showSkeleton = computed(() => !processingFailure.value && !context.value.center && (props.contentState.status === 'loading' || props.isGenerating))
 const relatedNodes = computed(() => graph.value?.nodes.filter(node => node.slug !== context.value.center?.slug) || [])
+const PAGE_TYPE_STYLES: Record<string, { label: string; color: string }> = {
+  summary: { label: '摘要', color: '#0052d9' },
+  entity: { label: '实体', color: '#2ba471' },
+  concept: { label: '概念', color: '#e37318' },
+  synthesis: { label: '综合', color: '#0594fa' },
+  comparison: { label: '对比', color: '#d54941' },
+}
+const DEFAULT_PAGE_TYPE_STYLE = { label: 'Wiki 页面', color: '#5f6b7a' }
+const visibleLegendItems = computed(() => {
+  const presentTypes = new Set(graph.value?.nodes.map(node => node.page_type) || [])
+  return [...presentTypes].map(type => ({ type, ...(PAGE_TYPE_STYLES[type] || DEFAULT_PAGE_TYPE_STYLE) }))
+})
 const overview = computed(() => {
   const centerTitle = context.value.center?.title || '该视频摘要'
   if (!relatedNodes.value.length) return `${centerTitle} 暂未关联其他 Wiki 页面。`
@@ -74,6 +104,11 @@ function openWikiPage(slug: string) {
   router.push({ path: `/platform/knowledge-bases/${context.value.knowledgeBaseId}`, query: { tab: 'wiki', slug } })
 }
 
+function fitGraph() {
+  chart?.dispatchAction({ type: 'restore' })
+  chart?.resize()
+}
+
 function renderGraph() {
   if (!chartElement.value || !graph.value || !context.value.center) return
   disposeChart()
@@ -81,7 +116,6 @@ function renderGraph() {
   const centerSlug = context.value.center.slug
   const styles = getComputedStyle(chartElement.value)
   const brandColor = styles.getPropertyValue('--td-brand-color').trim() || '#07c05f'
-  const surfaceColor = styles.getPropertyValue('--td-bg-color-container').trim() || '#ffffff'
   const strokeColor = styles.getPropertyValue('--td-component-stroke').trim() || '#e7e7e7'
   const textColor = styles.getPropertyValue('--td-text-color-primary').trim() || 'rgba(0, 0, 0, 0.9)'
   chart.setOption({
@@ -91,13 +125,15 @@ function renderGraph() {
       type: 'graph', layout: 'force', roam: true, draggable: true,
       data: graph.value.nodes.map(node => ({
         id: node.slug, name: node.title || node.slug,
-        symbolSize: node.slug === centerSlug ? 54 : 34,
-        itemStyle: { color: node.slug === centerSlug ? brandColor : surfaceColor, borderColor: strokeColor, borderWidth: node.slug === centerSlug ? 0 : 1 },
-        label: { show: true, color: textColor, fontSize: 12, width: 96, overflow: 'truncate' },
+        symbolSize: node.slug === centerSlug ? 58 : 36,
+        itemStyle: node.slug === centerSlug
+          ? { color: brandColor, borderColor: 'rgba(255, 255, 255, 0.96)', borderWidth: 3, shadowBlur: 12, shadowColor: 'rgba(7, 192, 95, 0.22)' }
+          : { color: (PAGE_TYPE_STYLES[node.page_type] || DEFAULT_PAGE_TYPE_STYLE).color, borderColor: 'rgba(255, 255, 255, 0.92)', borderWidth: 2 },
+        label: { show: true, color: textColor, fontSize: 12, width: 104, overflow: 'truncate' },
       })),
       links: graph.value.edges.map(edge => ({ source: edge.source, target: edge.target })),
       lineStyle: { color: strokeColor, width: 1.2, curveness: 0.08 },
-      force: { repulsion: 280, edgeLength: [76, 128], gravity: 0.08 },
+      force: { repulsion: 300, edgeLength: [82, 138], gravity: 0.08 },
       emphasis: { focus: 'adjacency', lineStyle: { width: 2, color: brandColor } },
     }],
   })
@@ -131,9 +167,19 @@ onBeforeUnmount(disposeChart)
 
 <style scoped>
 .native-wiki-graph { display: grid; gap: 14px; min-height: 320px; padding: 16px 4px 96px 0; }
+.native-wiki-graph__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.native-wiki-graph__eyebrow { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; color: var(--td-text-color-primary); font: var(--td-font-title-small); font-weight: 600; }
 .native-wiki-graph__overview { margin: 0; color: var(--td-text-color-secondary); font: var(--td-font-body-small); line-height: 22px; }
-.native-wiki-graph__canvas { height: min(520px, calc(100vh - 260px)); min-height: 320px; border: 1px solid var(--td-component-stroke); border-radius: var(--td-radius-large); background: color-mix(in srgb, var(--td-bg-color-container) 58%, transparent); backdrop-filter: blur(18px) saturate(112%); }
+.native-wiki-graph__fit { display: inline-grid; flex: 0 0 auto; width: 32px; height: 32px; place-items: center; border: 1px solid var(--td-component-stroke); border-radius: var(--td-radius-medium); color: var(--td-text-color-secondary); background: rgba(255, 255, 255, .58); cursor: pointer; transition: color .15s ease, border-color .15s ease, background .15s ease; }
+.native-wiki-graph__fit:hover:not(:disabled) { color: var(--td-brand-color); border-color: var(--td-brand-color); background: var(--td-brand-color-light); }
+.native-wiki-graph__fit:disabled { cursor: default; opacity: .45; }
+.native-wiki-graph__frame { position: relative; overflow: hidden; height: min(520px, calc(100vh - 260px)); min-height: 320px; border: 1px solid var(--td-component-stroke); border-radius: var(--td-radius-large); background: color-mix(in srgb, var(--td-bg-color-container) 58%, transparent); backdrop-filter: blur(18px) saturate(112%); }
+.native-wiki-graph__canvas { width: 100%; height: 100%; }
+.native-wiki-graph__legend { position: absolute; top: 12px; right: 12px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 10px; max-width: calc(100% - 24px); padding: 8px 10px; border: 1px solid rgba(255, 255, 255, .9); border-radius: var(--td-radius-medium); background: rgba(255, 255, 255, .78); box-shadow: var(--td-shadow-1); backdrop-filter: blur(12px) saturate(112%); pointer-events: none; }
+.native-wiki-graph__legend-item { display: inline-flex; align-items: center; gap: 5px; color: var(--td-text-color-secondary); font: var(--td-font-body-small); line-height: 16px; white-space: nowrap; }
+.native-wiki-graph__legend-item i { width: 8px; height: 8px; border-radius: var(--td-radius-circle); box-shadow: 0 0 0 1px rgba(255, 255, 255, .9); }
+.native-wiki-graph__hint { position: absolute; right: 12px; bottom: 12px; color: var(--td-text-color-placeholder); font: var(--td-font-body-small); pointer-events: none; }
 .native-wiki-graph__canvas-state, .native-wiki-graph__skeleton, .native-wiki-graph > :deep(.t-empty) { min-height: 320px; display: grid; place-items: center; }
 .native-wiki-graph__skeleton { padding: 16px 8px; }
-@media (max-width: 768px) { .native-wiki-graph__canvas { height: 360px; min-height: 280px; } }
+@media (max-width: 768px) { .native-wiki-graph__frame { height: 360px; min-height: 280px; } .native-wiki-graph__legend { top: 8px; right: 8px; left: 8px; justify-content: flex-start; } .native-wiki-graph__hint { right: 8px; bottom: 8px; } }
 </style>

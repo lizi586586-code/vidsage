@@ -317,6 +317,8 @@ func buildRouter(deps *Deps) *gin.Engine {
 	if deps.Wiki != nil {
 		ch := NewContentHandler(deps.DB, deps.Wiki, roles.Knowledge, deps.Graph)
 		videos := api.Group("/videos/:id")
+		videos.GET("/wiki-graph-context", ch.NativeWikiGraphContext)
+		videos.GET("/wiki-graph", ch.NativeWikiGraph)
 		videos.GET("/related-knowledge", ch.RelatedKnowledge)
 		videos.GET("/outline", ch.Outline)
 		videos.GET("/overview", ch.Overview)

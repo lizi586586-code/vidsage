@@ -31,7 +31,7 @@ export async function fetchVideoContentModule(
   }
   if (module === 'relatedKnowledge') {
     const result = await Promise.allSettled([fetchRelatedKnowledge(videoId)])
-    return settleContentState(result[0], emptyRelatedKnowledge, data => data.anchors.length === 0 && data.crossVideoItems.length === 0)
+    return settleContentState(result[0], emptyRelatedKnowledge, data => !data.center)
   }
   const result = await Promise.allSettled([fetchTranscriptPage(videoId)])
   return settleContentState(result[0], '', data => data.trim().length === 0)

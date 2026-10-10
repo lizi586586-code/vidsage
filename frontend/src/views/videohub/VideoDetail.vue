@@ -37,7 +37,7 @@
               </t-tab-panel>
               <t-tab-panel v-if="showRelatedKnowledgeTab" value="related">
                 <template #label><span class="video-detail-page__tab-label"><span>关联知识</span></span></template>
-                <RelatedKnowledge :key="video.id" :video="video" :content-state="content.relatedKnowledge" :is-generating="relatedGenerating" :is-processing-failed="relatedFailed" :is-retrying="retryingStage === relatedRetryStage" @reload="reloadRelatedKnowledge" @retry="retryContentModule('relatedKnowledge')" @seek="seekTo" @select-video-by-id="onSelectVideoById" />
+                <RelatedKnowledge :key="video.id" :content-state="content.relatedKnowledge" :is-generating="relatedGenerating" :is-processing-failed="relatedFailed" :is-retrying="retryingStage === relatedRetryStage" @reload="reloadRelatedKnowledge" @retry="retryContentModule('relatedKnowledge')" />
               </t-tab-panel>
             </t-tabs>
           </aside>

@@ -23,6 +23,7 @@ type Video struct {
 	TranscriptRevision       int64          `json:"transcript_revision"`
 	TranscriptActiveRevision int64          `json:"transcript_active_revision"`
 	KnowledgeBaseWikiPageID  string         `gorm:"type:varchar(64)" json:"knowledge_base_wiki_page_id"` // extract-video-knowledge 产物「知识底座」索引页 ID
+	NativeWikiGraphSourceID  string         `gorm:"type:varchar(64)" json:"native_wiki_graph_source_id"` // WeKnora 原生 Summary 页的 source_refs 知识 ID
 	KnowledgeAuditStatus     string         `gorm:"type:varchar(16)" json:"knowledge_audit_status"`      // passed/conditional/failed
 	OutlineWikiPageID        string         `gorm:"type:varchar(64)" json:"outline_wiki_page_id"`
 	OutlineDraftWikiPageID   string         `gorm:"type:varchar(64)" json:"outline_draft_wiki_page_id"`

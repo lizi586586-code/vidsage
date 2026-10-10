@@ -1,11 +1,10 @@
-import type { Chapter, ContentState, CurrentKnowledgeAnchor, CrossVideoKnowledgeItem, RelationOverview, SummarySection } from '@/types/videohub'
+import type { Chapter, ContentState, SummarySection } from '@/types/videohub'
 import { resolveProcessingErrorMessage } from '../../utils/videoProcessingStatus'
 
 export interface RelatedKnowledgeContent {
   videoId: string
-  overview: RelationOverview | null
-  anchors: CurrentKnowledgeAnchor[]
-  crossVideoItems: CrossVideoKnowledgeItem[]
+  knowledgeBaseId: string
+  center: { slug: string; title: string; pageType: string } | null
 }
 
 export interface VideoContentState {
@@ -26,9 +25,8 @@ export function shouldShowRelatedKnowledgeTab(_state: ContentState<RelatedKnowle
 
 export const emptyRelatedKnowledge: RelatedKnowledgeContent = {
   videoId: '',
-  overview: null,
-  anchors: [],
-  crossVideoItems: [],
+  knowledgeBaseId: '',
+  center: null,
 }
 
 export function createLoadingContentState(): VideoContentState {
@@ -111,7 +109,7 @@ export function buildVideoContentState(
     summary: summary.status === 'fulfilled'
       ? { status: summary.value.sections.length === 0 ? 'empty' : 'ready', data: summary.value.sections }
       : settleContentState(summary, [], () => true),
-    relatedKnowledge: settleContentState(relatedKnowledge, emptyRelatedKnowledge, data => data.anchors.length === 0 && data.crossVideoItems.length === 0),
+    relatedKnowledge: settleContentState(relatedKnowledge, emptyRelatedKnowledge, data => !data.center),
     transcriptPage: settleContentState(transcriptPage, '', data => data.trim().length === 0),
   }
 }

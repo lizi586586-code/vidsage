@@ -2,6 +2,7 @@
 //
 // 端点：
 //   - GET /api/custom/videos/:id/related-knowledge   关联知识（5 类型双源合并）
+//   - GET /api/custom/videos/:id/wiki-graph-context  原生 Wiki 图谱中心页
 //   - GET /api/custom/videos/:id/outline             章节大纲
 //   - GET /api/custom/videos/:id/overview            快速概要
 //   - GET /api/custom/videos/:id/summary             智能总结
@@ -574,6 +575,88 @@ func (h *ContentHandler) loadVideo(c *gin.Context) (*model.Video, bool) {
 		return nil, false
 	}
 	return &v, true
+}
+
+// nativeWikiSummaryPage resolves and verifies the video's existing summary
+// artifact before it is used as the native Wiki graph center.
+func (h *ContentHandler) nativeWikiSummaryPage(c *gin.Context, video *model.Video) (*weknora.WikiPage, bool) {
+	if strings.TrimSpace(video.SummaryWikiPageID) == "" {
+		contentError(c, http.StatusNotFound, video.ID, "summary", "not_generated", "summary wiki page not yet generated", video.UpdatedAt)
+		return nil, false
+	}
+	page, err := h.Wiki.GetPageByID(c.Request.Context(), h.KBID, video.SummaryWikiPageID)
+	if err != nil {
+		contentError(c, http.StatusBadGateway, video.ID, "summary", "weknora_read_failed", "read summary wiki page: "+err.Error(), video.UpdatedAt)
+		return nil, false
+	}
+	if page == nil || strings.TrimSpace(page.Slug) == "" {
+		contentError(c, http.StatusNotFound, video.ID, "summary", "artifact_missing", "summary wiki page is unavailable", video.UpdatedAt)
+		return nil, false
+	}
+	frontmatter := page.ParsedFrontmatter()
+	if frontmatterString(frontmatter, "type") != "typed_summary" || frontmatterString(frontmatter, "source_video_id") != video.ID {
+		contentError(c, http.StatusNotFound, video.ID, "summary", "artifact_missing", "summary wiki page is invalid or belongs to another video", video.UpdatedAt)
+		return nil, false
+	}
+	return page, true
+}
+
+// nativeWikiGraphCenter prefers the original WeKnora Summary page when the
+// video carries its source knowledge reference. That page owns the native
+// Wiki links. Videos without the reference continue to use their typed
+// summary artifact.
+func (h *ContentHandler) nativeWikiGraphCenter(c *gin.Context, video *model.Video) (*weknora.WikiPage, bool) {
+	if sourceRef := strings.TrimSpace(video.NativeWikiGraphSourceID); sourceRef != "" {
+		page, err := h.Wiki.GetSummaryPageBySourceRef(c.Request.Context(), h.KBID, sourceRef)
+		if err != nil {
+			contentError(c, http.StatusBadGateway, video.ID, "summary", "weknora_read_failed", "read native wiki summary page: "+err.Error(), video.UpdatedAt)
+			return nil, false
+		}
+		if page == nil || page.PageType != "summary" || strings.TrimSpace(page.Slug) == "" {
+			contentError(c, http.StatusNotFound, video.ID, "summary", "artifact_missing", "native wiki summary page is unavailable", video.UpdatedAt)
+			return nil, false
+		}
+		return page, true
+	}
+	return h.nativeWikiSummaryPage(c, video)
+}
+
+// NativeWikiGraphContext resolves the video's existing summary artifact to a
+// native Wiki page. It intentionally returns no projected graph data.
+func (h *ContentHandler) NativeWikiGraphContext(c *gin.Context) {
+	video, ok := h.loadVideo(c)
+	if !ok {
+		return
+	}
+	page, ok := h.nativeWikiGraphCenter(c, video)
+	if !ok {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"video_id":          video.ID,
+		"knowledge_base_id": h.KBID,
+		"center":            gin.H{"slug": page.Slug, "title": page.Title, "page_type": page.PageType},
+	})
+}
+
+// NativeWikiGraph proxies the verified video's one-hop WeKnora native Wiki
+// graph. The custom backend only authorizes and forwards the upstream result;
+// it does not construct or persist a separate knowledge graph.
+func (h *ContentHandler) NativeWikiGraph(c *gin.Context) {
+	video, ok := h.loadVideo(c)
+	if !ok {
+		return
+	}
+	page, ok := h.nativeWikiGraphCenter(c, video)
+	if !ok {
+		return
+	}
+	graph, err := h.Wiki.GetEgoGraph(c.Request.Context(), h.KBID, page.Slug)
+	if err != nil {
+		contentError(c, http.StatusBadGateway, video.ID, "summary", "weknora_read_failed", "read native wiki graph: "+err.Error(), video.UpdatedAt)
+		return
+	}
+	c.JSON(http.StatusOK, graph)
 }
 
 // RelatedKnowledgeResp 关联知识聚合响应（CP-T008）

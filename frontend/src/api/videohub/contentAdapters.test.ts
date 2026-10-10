@@ -354,7 +354,7 @@ test('content loader isolates failed content requests', () => {
   const state = buildVideoContentState(
     { status: 'fulfilled', value: [{ id: 'chapter-1' }] as any },
     { status: 'rejected', reason: { status: 500, message: 'summary unavailable' } },
-    { status: 'fulfilled', value: { videoId: 'video-1', overview: null, anchors: [], crossVideoItems: [] } },
+    { status: 'fulfilled', value: { videoId: 'video-1', knowledgeBaseId: '', center: null } },
   )
 
   assert.equal(state.outline.status, 'ready')
@@ -405,7 +405,7 @@ test('content loader distinguishes not generated artifacts from failures', () =>
 })
 
 test('keeps related knowledge tab visible after an empty result', () => {
-  const emptyData = { videoId: 'video-1', overview: null, anchors: [], crossVideoItems: [] }
+  const emptyData = { videoId: 'video-1', knowledgeBaseId: '', center: null }
   assert.equal(shouldShowRelatedKnowledgeTab({ status: 'loading', data: emptyData }), true)
   assert.equal(shouldShowRelatedKnowledgeTab({ status: 'empty', data: emptyData }), true)
   assert.equal(shouldShowRelatedKnowledgeTab({ status: 'ready', data: emptyData }), true)

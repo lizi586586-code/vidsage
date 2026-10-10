@@ -456,6 +456,28 @@ func TestComputeGraphSubset_ExcludesNativeWikiIndexPages(t *testing.T) {
 	}
 }
 
+func TestComputeGraphSubset_AllowsAnExplicitIndexCenter(t *testing.T) {
+	pages := makeGraphFixture()
+	pages = append(pages, &types.WikiPage{
+		Slug:     "summary/video-1",
+		Title:    "Video summary",
+		PageType: types.WikiPageTypeIndex,
+		OutLinks: types.StringArray{"hub"},
+	})
+	pages[0].InLinks = append(pages[0].InLinks, "summary/video-1")
+
+	got, err := computeGraphSubset(pages, &types.WikiGraphRequest{
+		Mode: types.WikiGraphModeEgo, Center: "summary/video-1", Depth: 1, Limit: 20,
+	})
+	if err != nil {
+		t.Fatalf("ego graph with index center: %v", err)
+	}
+	slugs := nodeSlugs(got)
+	if !slugs["summary/video-1"] || !slugs["hub"] {
+		t.Fatalf("ego graph = %v, want summary center and its neighbor", slugs)
+	}
+}
+
 // TestComputeGraphSubset_OverviewTruncatesByLinkCount verifies that overview
 // mode returns the most-connected nodes first and reports truncation
 // honestly in Meta. At 4万 pages this is the path that must NOT return the

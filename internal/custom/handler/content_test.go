@@ -95,6 +95,110 @@ func summaryTestPage(videoID, payload string) string {
 	return "---\ntype: typed_summary\nsource_video_id: " + videoID + "\ntranscript_generation: generation-1\n---\n\n" + payload
 }
 
+func TestNativeWikiGraphContextReturnsOwnedSummaryPage(t *testing.T) {
+	db := openTestVideoDB(t)
+	video := model.Video{ID: uuid.NewString(), Title: "video", Status: model.VideoStatusCompleted, SummaryWikiPageID: "summary-v1"}
+	require.NoError(t, db.Create(&video).Error)
+	server := newContentWikiTestServer(t, video.ID, map[string]weknora.WikiPage{
+		"summary-v1": {
+			ID: "summary-v1", Slug: "summary/" + video.ID, Title: "视频摘要", PageType: "index",
+			Content: "---\ntype: typed_summary\nsource_video_id: " + video.ID + "\n---\n\n摘要内容",
+		},
+	})
+	defer server.Close()
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Params = gin.Params{{Key: "id", Value: video.ID}}
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/custom/videos/"+video.ID+"/wiki-graph-context", nil)
+	NewContentHandler(db, weknora.NewWikiClient(config.WeKnoraConfig{BaseURL: server.URL}), "kb-1").NativeWikiGraphContext(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var payload struct {
+		VideoID         string `json:"video_id"`
+		KnowledgeBaseID string `json:"knowledge_base_id"`
+		Center          struct {
+			Slug     string `json:"slug"`
+			Title    string `json:"title"`
+			PageType string `json:"page_type"`
+		} `json:"center"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+	require.Equal(t, video.ID, payload.VideoID)
+	require.Equal(t, "kb-1", payload.KnowledgeBaseID)
+	require.Equal(t, "summary/"+video.ID, payload.Center.Slug)
+	require.Equal(t, "视频摘要", payload.Center.Title)
+	require.Equal(t, "index", payload.Center.PageType)
+}
+
+func TestNativeWikiGraphContextRejectsSummaryFromAnotherVideo(t *testing.T) {
+	db := openTestVideoDB(t)
+	video := model.Video{ID: uuid.NewString(), Title: "video", Status: model.VideoStatusCompleted, SummaryWikiPageID: "summary-v1"}
+	require.NoError(t, db.Create(&video).Error)
+	server := newContentWikiTestServer(t, video.ID, map[string]weknora.WikiPage{
+		"summary-v1": {ID: "summary-v1", Slug: "summary/other", PageType: "index", Content: "---\ntype: typed_summary\nsource_video_id: another-video\n---\n\n摘要内容"},
+	})
+	defer server.Close()
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Params = gin.Params{{Key: "id", Value: video.ID}}
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/custom/videos/"+video.ID+"/wiki-graph-context", nil)
+	NewContentHandler(db, weknora.NewWikiClient(config.WeKnoraConfig{BaseURL: server.URL}), "kb-1").NativeWikiGraphContext(context)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code, recorder.Body.String())
+}
+
+func TestNativeWikiGraphContextUsesNativeSummarySourceReference(t *testing.T) {
+	db := openTestVideoDB(t)
+	video := model.Video{ID: uuid.NewString(), Title: "video", Status: model.VideoStatusCompleted, NativeWikiGraphSourceID: "knowledge-1"}
+	require.NoError(t, db.Create(&video).Error)
+	server := newContentWikiTestServer(t, video.ID, map[string]weknora.WikiPage{
+		"native-summary": {ID: "native-summary", Slug: "summary/knowledge-1", Title: "原生摘要", PageType: "summary", SourceRefs: []string{"knowledge-1"}, Content: "原生摘要内容"},
+	})
+	defer server.Close()
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Params = gin.Params{{Key: "id", Value: video.ID}}
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/custom/videos/"+video.ID+"/wiki-graph-context", nil)
+	NewContentHandler(db, weknora.NewWikiClient(config.WeKnoraConfig{BaseURL: server.URL}), "kb-1").NativeWikiGraphContext(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "summary/knowledge-1")
+}
+
+func TestNativeWikiGraphProxiesVerifiedSummaryEgoGraph(t *testing.T) {
+	db := openTestVideoDB(t)
+	video := model.Video{ID: uuid.NewString(), Title: "video", Status: model.VideoStatusCompleted, SummaryWikiPageID: "summary-v1"}
+	require.NoError(t, db.Create(&video).Error)
+	var graphRequestURL string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/knowledgebase/kb-1/wiki/pages":
+			_ = json.NewEncoder(writer).Encode(weknora.ListPagesResp{Pages: []weknora.WikiPage{{ID: "summary-v1", Slug: "typed-summary/" + video.ID}}, Total: 1, TotalPages: 1})
+		case "/api/v1/knowledgebase/kb-1/wiki/pages/typed-summary/" + video.ID:
+			_ = json.NewEncoder(writer).Encode(weknora.WikiPage{ID: "summary-v1", Slug: "typed-summary/" + video.ID, Title: "视频摘要", PageType: "index", Content: "---\ntype: typed_summary\nsource_video_id: " + video.ID + "\n---\n\n摘要内容"})
+		case "/api/v1/knowledgebase/kb-1/wiki/graph":
+			graphRequestURL = request.URL.String()
+			require.Equal(t, "api-key", request.Header.Get("X-API-Key"))
+			_ = json.NewEncoder(writer).Encode(weknora.WikiGraphData{})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Params = gin.Params{{Key: "id", Value: video.ID}}
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/custom/videos/"+video.ID+"/wiki-graph", nil)
+	NewContentHandler(db, weknora.NewWikiClient(config.WeKnoraConfig{BaseURL: server.URL, APIKey: "api-key"}), "kb-1").NativeWikiGraph(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "/api/v1/knowledgebase/kb-1/wiki/graph?center=typed-summary%2F"+video.ID+"&depth=1&limit=100&mode=ego", graphRequestURL)
+}
+
 func TestSummaryNotGeneratedReturnsStructuredStageStatus(t *testing.T) {
 	db := openTestVideoDB(t)
 	video := model.Video{ID: uuid.NewString(), Title: "video", Status: model.VideoStatusProcessing}

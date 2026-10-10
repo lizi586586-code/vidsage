@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
-test('overview displays current knowledge count instead of cross-video relation count', () => {
+test('related knowledge uses the native Wiki ego graph and Wiki deep links', () => {
   const relatedKnowledge = readFileSync(new URL('./RelatedKnowledge.vue', import.meta.url), 'utf8')
-  const overviewCard = readFileSync(new URL('./RelationOverviewCard.vue', import.meta.url), 'utf8')
 
-  assert.match(relatedKnowledge, /<RelationOverviewCard[^>]*:knowledge-count="anchors\.length"/)
-  assert.match(overviewCard, /knowledgeCount/)
-  assert.doesNotMatch(overviewCard, /<strong>\{\{\s*overview\.relation_count\s*\}\}<\/strong>\s*<span>个关联知识<\/span>/)
+  assert.match(relatedKnowledge, /fetchNativeWikiGraph\(context\.value\.videoId\)/)
+  assert.doesNotMatch(relatedKnowledge, /getWikiGraph\(/)
+  assert.match(relatedKnowledge, /\/platform\/knowledge-bases\/\$\{context\.value\.knowledgeBaseId\}/)
+  assert.match(relatedKnowledge, /query: \{ tab: 'wiki', slug \}/)
+  assert.match(relatedKnowledge, /已关联 \$\{relatedNodes\.value\.length\} 个 Wiki 页面/)
+  assert.doesNotMatch(relatedKnowledge, /KnowledgeAnchorCard|RelationOverviewCard|GraphCanvas|crossVideo/)
 })

@@ -1,0 +1,12 @@
+ALTER TABLE open_maic_classrooms ADD COLUMN IF NOT EXISTS job_id VARCHAR(128) NOT NULL DEFAULT '';
+ALTER TABLE open_maic_classrooms ADD COLUMN IF NOT EXISTS generation_status VARCHAR(32) NOT NULL DEFAULT 'succeeded';
+ALTER TABLE open_maic_classrooms ALTER COLUMN generation_status SET DEFAULT 'queued';
+ALTER TABLE open_maic_classrooms ALTER COLUMN classroom_id DROP NOT NULL;
+ALTER TABLE open_maic_classrooms ALTER COLUMN classroom_url DROP NOT NULL;
+ALTER TABLE open_maic_classrooms DROP CONSTRAINT IF EXISTS open_maic_classrooms_classroom_id_key;
+ALTER TABLE open_maic_classrooms DROP CONSTRAINT IF EXISTS open_maic_classrooms_job_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_openmaic_classroom ON open_maic_classrooms(classroom_id) WHERE classroom_id <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_openmaic_job ON open_maic_classrooms(job_id) WHERE job_id <> '';
+ALTER TABLE open_maic_classrooms ADD COLUMN IF NOT EXISTS source_references TEXT;
+ALTER TABLE open_maic_classrooms ADD COLUMN IF NOT EXISTS memory_read BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE open_maic_classrooms ADD COLUMN IF NOT EXISTS memory_count INTEGER NOT NULL DEFAULT 0;

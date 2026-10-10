@@ -288,6 +288,20 @@ func buildRouter(deps *Deps) *gin.Engine {
 	api.POST("/chat/evidence", chatEvidence.Lookup)
 	chatAudit := NewChatAuditHandler(deps.DB)
 	api.POST("/chat/source-audit", chatAudit.RecordSourceAudit)
+	bridgeSecret := ""
+	if deps.Cfg != nil {
+		bridgeSecret = deps.Cfg.OpenMAICBridgeSecret
+	}
+	nativeURL := ""
+	if deps.Cfg != nil {
+		nativeURL = deps.Cfg.WeKnora.BaseURL
+	}
+	classroom := NewOpenMAICClassroomHandler(deps.DB, bridgeSecret, nativeURL)
+	api.POST("/learning/openmaic/prepare", classroom.Prepare)
+	api.POST("/learning/openmaic/:requestID/claim", classroom.Claim)
+	api.GET("/learning/openmaic/:classroomID/status", classroom.Status)
+	api.GET("/learning/openmaic/pending", classroom.Pending)
+	api.POST("/learning/openmaic/status", classroom.SyncStatus)
 	chatWiki := NewChatWikiHandler(deps.DB, deps.Wiki, roles.Knowledge)
 	api.GET("/chat/wiki-search", chatWiki.Search)
 	api.GET("/videos/:id/chat-scope", chatScope.Video)

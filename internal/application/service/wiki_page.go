@@ -648,12 +648,9 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 		if req.Center == "" {
 			return nil, errors.New("ego graph requires a center slug")
 		}
-		centerPage, ok := pageBySlug[req.Center]
+		_, ok := pageBySlug[req.Center]
 		if !ok {
 			return nil, fmt.Errorf("ego center slug %q not found", req.Center)
-		}
-		if centerPage.PageType == types.WikiPageTypeIndex {
-			return nil, fmt.Errorf("ego center slug %q is not a graph page", req.Center)
 		}
 		depth := req.Depth
 		if depth < 1 {
@@ -771,9 +768,10 @@ func computeGraphSubset(pages []*types.WikiPage, req *types.WikiGraphRequest) (*
 
 // bfsEgoSlugs computes the undirected BFS neighborhood of `center` up to
 // `depth` hops using both inbound and outbound links. Type-filtered pages
-// are excluded from the result but are also NOT traversed through. Index
-// pages are always excluded because they are Wiki system pages. The caller
-// guarantees center exists and is not an index page.
+// are excluded from the result but are also NOT traversed through. An index
+// page may be the explicit ego center (for example a video summary page), but
+// other index pages remain excluded so system directory pages cannot bridge
+// otherwise unrelated knowledge.
 func bfsEgoSlugs(
 	pageBySlug map[string]*types.WikiPage,
 	center string,
@@ -784,9 +782,6 @@ func bfsEgoSlugs(
 	hasTypeFilter := len(typeAllow) > 0
 	centerPage, ok := pageBySlug[center]
 	if !ok {
-		return map[string]struct{}{}
-	}
-	if centerPage.PageType == types.WikiPageTypeIndex {
 		return map[string]struct{}{}
 	}
 	// If the center itself fails the type filter we honor the filter and

@@ -10,7 +10,26 @@ import type {
   RelationType,
   WikiGraphRequest,
 } from '@/types/videohub'
-import type { RelatedKnowledgePayload } from '../relatedKnowledge'
+
+// This fixture validates the legacy offline evaluation corpus only. It is not
+// part of the video detail API, which now reads WeKnora's native Wiki graph.
+interface LegacyEvaluationRelatedKnowledgePayload {
+  videoId: string
+  overview: {
+    relation_overview: string
+    related_video_count: number
+    relation_count: number
+    top_topics: string[]
+  }
+  anchors: Array<{
+    id: string
+    knowledge_type: KnowledgeType
+    content: string
+    evidence: Array<{ id: string; text: string; timestamp: string; seconds: number }>
+    [key: string]: unknown
+  }>
+  crossVideoItems: unknown[]
+}
 
 export const AI_LEARNING_EVAL_FIXTURE = 'ai-learning'
 export const AI_LEARNING_EVAL_VIDEO_ID = '8a6bad62-551e-4370-9f52-52886dfe4bc2'
@@ -279,7 +298,7 @@ export function getAiLearningEvalDetail(wikiPageId: string): KnowledgeGraphDetai
   }
 }
 
-export function getAiLearningEvalRelatedKnowledge(videoId: string): RelatedKnowledgePayload {
+export function getAiLearningEvalRelatedKnowledge(videoId: string): LegacyEvaluationRelatedKnowledgePayload {
   const anchors = objects.map((item) => {
     const incident = relations.filter(relation => relation.source === item.key || relation.target === item.key)
     return {

@@ -74,6 +74,31 @@ type WikiPageWrite struct {
 	Version    int
 }
 
+// WikiGraphData is the native WeKnora Wiki graph response. It deliberately
+// mirrors the upstream JSON contract rather than creating a product graph
+// projection.
+type WikiGraphData struct {
+	Nodes []struct {
+		Slug      string `json:"slug"`
+		Title     string `json:"title"`
+		PageType  string `json:"page_type"`
+		LinkCount int    `json:"link_count"`
+		Familiar  bool   `json:"familiar,omitempty"`
+	} `json:"nodes"`
+	Edges []struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+	} `json:"edges"`
+	Meta struct {
+		Mode      string `json:"mode"`
+		Total     int    `json:"total"`
+		Returned  int    `json:"returned"`
+		Truncated bool   `json:"truncated"`
+		Center    string `json:"center,omitempty"`
+		Depth     int    `json:"depth,omitempty"`
+	} `json:"meta"`
+}
+
 // ParsedFrontmatter 从 content 顶部解析 YAML frontmatter（--- 包裹），返回 map。
 func (p *WikiPage) ParsedFrontmatter() map[string]any {
 	return parseFrontmatter(p.Content)
@@ -211,6 +236,38 @@ func (w *WikiClient) GetPageByID(ctx context.Context, kbID, pageID string) (*Wik
 	}
 }
 
+// GetSummaryPageBySourceRef resolves one native Summary page by the WeKnora
+// knowledge ID recorded in its source_refs. A source reference must identify
+// exactly one Summary page; ambiguity is a data-integrity error.
+func (w *WikiClient) GetSummaryPageBySourceRef(ctx context.Context, kbID, sourceRef string) (*WikiPage, error) {
+	sourceRef = strings.TrimSpace(sourceRef)
+	if sourceRef == "" {
+		return nil, fmt.Errorf("wiki summary source reference is required")
+	}
+	pages, err := w.ListAllPages(ctx, kbID, "summary")
+	if err != nil {
+		return nil, fmt.Errorf("list native summary pages: %w", err)
+	}
+	var matched *WikiPage
+	for i := range pages {
+		page := &pages[i]
+		for _, ref := range page.SourceRefs {
+			if ref != sourceRef {
+				continue
+			}
+			if matched != nil {
+				return nil, fmt.Errorf("multiple native summary pages reference %s", sourceRef)
+			}
+			matched = page
+			break
+		}
+	}
+	if matched == nil {
+		return nil, nil
+	}
+	return w.GetPage(ctx, kbID, matched.Slug)
+}
+
 // GetPage 读单个 Wiki 页面
 func (w *WikiClient) GetPage(ctx context.Context, kbID, slug string) (*WikiPage, error) {
 	u := fmt.Sprintf("%s/api/v1/knowledgebase/%s/wiki/pages/%s", w.cfg.BaseURL, kbID, url.PathEscape(slug))
@@ -236,6 +293,40 @@ func (w *WikiClient) GetPage(ctx context.Context, kbID, slug string) (*WikiPage,
 		return nil, err
 	}
 	return &out, nil
+}
+
+// GetEgoGraph reads the one-hop native Wiki neighborhood for a known page.
+// Callers provide only a server-validated center slug; graph scope is fixed
+// here to prevent this read-only proxy becoming a general KB browser.
+func (w *WikiClient) GetEgoGraph(ctx context.Context, kbID, center string) (*WikiGraphData, error) {
+	if strings.TrimSpace(kbID) == "" || strings.TrimSpace(center) == "" {
+		return nil, fmt.Errorf("wiki graph kb_id and center are required")
+	}
+	query := url.Values{}
+	query.Set("mode", "ego")
+	query.Set("center", center)
+	query.Set("depth", "1")
+	query.Set("limit", "100")
+	u := fmt.Sprintf("%s/api/v1/knowledgebase/%s/wiki/graph?%s", w.cfg.BaseURL, kbID, query.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	w.setHeaders(req)
+	resp, err := w.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get wiki graph: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get wiki graph status %d: %s", resp.StatusCode, string(body))
+	}
+	var graph WikiGraphData
+	if err := json.NewDecoder(resp.Body).Decode(&graph); err != nil {
+		return nil, fmt.Errorf("decode wiki graph: %w", err)
+	}
+	return &graph, nil
 }
 
 func (w *WikiClient) UpsertPage(ctx context.Context, kbID string, input WikiPageWrite) (*WikiPage, error) {

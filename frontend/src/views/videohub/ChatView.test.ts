@@ -71,7 +71,7 @@ test('chat page swaps the send action for an icon-only pause control while gener
   assert.match(componentSource, /<t-tooltip v-if="isGenerating" content="暂停生成"/)
   assert.match(componentSource, /aria-label="暂停生成" @click="pauseGeneration"/)
   assert.match(componentSource, /<t-icon name="pause-circle" \/>/)
-  assert.match(componentSource, /onStopReady: stop => \{ stopCurrentTurn\.value = stop \}/)
+  assert.match(componentSource, /onStopReady: stop => \{ if \(revision === turnRevision\) stopCurrentTurn\.value = stop/)
 })
 
 test('chat page clears submitted drafts while keeping the composer editable during generation', () => {
@@ -88,7 +88,7 @@ test('chat page clears submitted drafts while keeping the composer editable duri
 
 test('chat page materializes pending sessions as soon as the backend creates them', () => {
   assert.match(componentSource, /function materializePendingSession\(pendingSession: ChatSession, createdSession: ChatSession\)/)
-  assert.match(componentSource, /onSessionCreated: createdSession => materializePendingSession\(session, createdSession\)/)
+  assert.match(componentSource, /onSessionCreated: createdSession => \{ if \(revision === turnRevision\) materializePendingSession\(session, createdSession\)/)
 })
 
 test('chat page persists the pending question before clearing both composers', () => {
@@ -115,7 +115,7 @@ test('chat page clears the recovery pointer after a routed session is loaded', (
 })
 
 test('chat page puts the pending question back when session recovery fails', () => {
-  assert.match(componentSource, /async function restorePendingChat\(\) \{[\s\S]*?try \{[\s\S]*?loadChatSession\(target\)[\s\S]*?\} catch \{[\s\S]*?question\.value = pending\.question/)
+  assert.match(componentSource, /async function restorePendingChat\(\) \{[\s\S]*?try \{[\s\S]*?loadChatSession\(target\)[\s\S]*?\} catch \{[\s\S]*?question\.value = reviewRequestId\(pending.question\) \? '' : pending\.question/)
 })
 
 test('chat page supplements a routed session when history still misses the pending question', () => {

@@ -37,33 +37,17 @@
             </div>
           </footer>
         </form>
-        <section class="suggestions" aria-label="推荐任务">
-          <div class="suggestions__heading">
-            <span class="suggestions__title"><span class="suggestions__spark">✦</span> 根据最近对话推荐</span>
-            <span class="suggestions__note">点击即可开始</span>
-          </div>
-          <div class="suggestions__grid">
-            <button
-              v-for="task in suggestedTasks"
-              :key="task.id"
-              class="suggestion-card"
-              type="button"
-              @click="beginSuggestedSession(task.prompt)"
-            >
-              <span class="suggestion-card__icon">✦</span>
-              <span class="suggestion-card__content">
-                <span class="suggestion-card__text">{{ task.label }}</span>
-                <span class="suggestion-card__meta">{{ task.meta }}</span>
-              </span>
-            </button>
-          </div>
-        </section>
+        <button class="review-entry" type="button" :disabled="isGenerating || preparingClassroom" @click="openReviewCourse">
+          <ReviewLearningIcon class="review-entry__icon" />
+          <span class="review-entry__copy"><strong>巩固学习</strong><small>根据学习特性，生成专属复习内容</small></span>
+        </button>
       </div>
     </section>
     <section v-else class="conversation">
       <header><div><strong>{{ activeSession.title }}</strong></div></header>
       <div ref="messageArea" class="conversation__messages">
-        <article v-for="(message, messageIndex) in activeSession.messages" :key="message.id" :class="['message', `message--${message.sender}`]">
+        <template v-for="(message, messageIndex) in activeSession.messages" :key="message.id">
+        <article v-if="!isReviewReply(message, messageIndex)" :class="['message', `message--${message.sender}`]">
           <div class="message__bubble">
             <AgentStreamDisplay
               v-if="message.sender === 'assistant'"
@@ -90,7 +74,7 @@
       :tabindex="canEditMessage(message, messageIndex) ? 0 : undefined"
       @click="canEditMessage(message, messageIndex) && startMessageEdit(message)"
       @keydown.enter.prevent="canEditMessage(message, messageIndex) && startMessageEdit(message)"
-    >{{ message.text }}</p>
+    >{{ visibleReviewQuestion(message.text) }}</p>
     <button
       v-if="canEditMessage(message, messageIndex)"
       class="message-user-content__edit"
@@ -107,7 +91,14 @@
 </template>
           </div>
         </article>
-        <div v-if="isGenerating && !streamingAssistantVisible" class="generating"><t-loading size="small" /> AI 正在整合视频知识回答中...</div>
+        <article v-if="isFirstReviewRequest(activeSession.messages, messageIndex)" class="message message--assistant">
+          <ReviewMaterialReply :request-id="reviewRequestId(message.text)" :user-id="authStore.user?.id || ''"
+            :initial-task="classroomResult" :video="classroomResult?.request_id === reviewRequestId(message.text) ? classroomVideo : null" @status="updateStatus" />
+        </article>
+        </template>
+        <div v-if="isGenerating && !streamingAssistantVisible && !reviewRequestId(lastUserQuery)" class="generating"><t-loading size="small" /> AI 正在整合视频知识回答中...</div>
+        <ReviewCourseChooser v-if="choosingCourse" v-model="selectedCourseId" :courses="courses" :recent-course-ids="recentCourseIds" :loading="loadingCourses"
+          :error="courseError" :busy="preparingClassroom" @confirm="confirmCourse" @cancel="cancelCourse" @retry="loadCourses" />
       </div>
       <form class="conversation-composer" @submit.prevent="continueSession">
         <div class="conversation-composer__body">
@@ -134,20 +125,30 @@
           </t-button>
         </div>
       </form>
+      <button class="review-entry review-entry--conversation" type="button" :disabled="isGenerating || preparingClassroom" @click="openReviewCourse">
+        <ReviewLearningIcon class="review-entry__icon" />
+        <span class="review-entry__copy"><strong>巩固学习</strong><small>根据学习特性，生成专属复习内容</small></span>
+      </button>
     </section>
   </main>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { createChatTurn, fetchSessions, loadChatSession } from '@/api/videohub/chat'
+import { createChatTurn, createReviewChatSession, fetchSessions, loadChatSession } from '@/api/videohub/chat'
 import type { StreamingChatMessage } from '@/api/videohub/chat'
 import type { ChatMessage, ChatSession } from '@/types/videohub'
 import AgentStreamDisplay from '@/views/chat/components/AgentStreamDisplay.vue'
 import VideohubAgentPicker from '@/components/videohub/VideohubAgentPicker.vue'
 import { useSettingsStore } from '@/stores/settings'
+import { useAuthStore } from '@/stores/auth'
+import { useReviewCourse } from '@/composables/useReviewCourse'
+import { isFirstReviewRequest, isReviewIntent, reviewRequestId, visibleReviewQuestion } from '@/api/videohub/reviewMaterials'
+import ReviewMaterialReply from '@/components/videohub/ReviewMaterialReply.vue'
+import ReviewCourseChooser from '@/components/videohub/ReviewCourseChooser.vue'
+import ReviewLearningIcon from '@/components/videohub/ReviewLearningIcon.vue'
 import { shouldAutoRoute } from '@/api/videohub/chatRequest'
 import {
   CHAT_PAGE_RECOVERY_KEY,
@@ -160,11 +161,21 @@ import {
 const router = useRouter()
 const route = useRoute()
 const settingsStore = useSettingsStore()
+const authStore = useAuthStore()
 const question = ref(''), followUp = ref(''), sessions = ref<ChatSession[]>([]), activeSession = ref<ChatSession | null>(null)
 const loadingSessions = ref(true), isGenerating = ref(false), messageArea = ref<HTMLElement | null>(null)
 const conversationLoading = ref(Boolean(route.query.session))
 const streamingAssistantId = ref('')
 const stopCurrentTurn = ref<null | (() => Promise<void>)>(null)
+let turnRevision = 0
+function leaveCurrentTurn() {
+  turnRevision += 1
+  void stopCurrentTurn.value?.()
+  stopCurrentTurn.value = null
+  isGenerating.value = false
+  streamingAssistantId.value = ''
+}
+onUnmounted(leaveCurrentTurn)
 const lastUserQuery = ref('')
 const editingMessageId = ref('')
 const editingMessageText = ref('')
@@ -176,61 +187,7 @@ const conversationSkeletonRows = [
   { id: 'user-2', align: 'user', rows: [{ width: '100%', height: '36px', type: 'rect' }] },
   { id: 'assistant-2', align: 'assistant', rows: [{ width: '68%', height: '16px' }, { width: '90%', height: '16px' }] },
 ]
-interface SuggestedTask {
-  id: string
-  label: string
-  prompt: string
-  meta: string
-}
-const fallbackSuggestedTasks: SuggestedTask[] = [
-  {
-    id: 'suggestion-prompt-formula',
-    label: '提炼最近视频里的 AI 提示词公式',
-    prompt: '请提炼最近看过的视频里的 AI 提示词公式，并整理成可以直接复用的模板。',
-    meta: '从最近学习内容开始',
-  },
-  {
-    id: 'suggestion-summary',
-    label: '总结最近看过的视频重点',
-    prompt: '请总结我最近看过的视频，列出每个视频的核心观点和关键时间点。',
-    meta: '跨视频整理',
-  },
-  {
-    id: 'suggestion-follow-up',
-    label: '继续追问上次对话中的关键概念',
-    prompt: '请结合上次对话，继续解释其中最重要的概念，并给出一个实际应用例子。',
-    meta: '延续最近对话',
-  },
-  {
-    id: 'suggestion-action',
-    label: '把学习内容转成下一步行动',
-    prompt: '请根据最近学习的视频内容，整理一份今天可以执行的行动清单。',
-    meta: '把知识变成行动',
-  },
-]
 type RenderableChatMessage = ChatMessage & Partial<StreamingChatMessage>
-const shorten = (value: string, length = 26) => {
-  const normalized = value.replace(/\s+/g, ' ').trim()
-  return normalized.length > length ? `${normalized.slice(0, length)}…` : normalized
-}
-const suggestedTasks = computed<SuggestedTask[]>(() => {
-  const derived: SuggestedTask[] = []
-  const seen = new Set<string>()
-  for (const session of sessions.value) {
-    const latestQuestion = [...session.messages].reverse().find(message => message.sender === 'user')?.text?.trim()
-    const source = latestQuestion || session.title?.trim()
-    if (!source || source === '未命名会话' || seen.has(source)) continue
-    seen.add(source)
-    derived.push({
-      id: `suggestion-${session.id}`,
-      label: `继续探索：${shorten(source)}`,
-      prompt: source,
-      meta: session.videoTitle ? `围绕视频「${shorten(session.videoTitle, 22)}」` : `来自${session.time || '最近'}的对话`,
-    })
-    if (derived.length >= 4) break
-  }
-  return derived.length > 0 ? derived : fallbackSuggestedTasks
-})
 const streamingAssistantVisible = computed(() => Boolean(streamingAssistantId.value && activeSession.value?.messages.some(message => {
   const item = message as RenderableChatMessage
   return item.id === streamingAssistantId.value && Boolean(item.text || item.activityText || item.agentEventStream?.length)
@@ -241,6 +198,41 @@ const sessionQueryId = computed(() => {
   const value = route.query.session
   return typeof value === 'string' ? value : ''
 })
+const { choosingCourse, loadingCourses, courseError, courses, selectedCourseId, preparingClassroom,
+  classroomResult, classroomVideo, recentCourseIds, askCourse, loadCourses, cancelCourse, confirmCourse, updateStatus } = useReviewCourse({
+  userId: computed(() => authStore.user?.id || ''),
+  storageKey: computed(() => `openmaic:${authStore.user?.id || ''}:chat`),
+  contextKey: sessionQueryId,
+  busy: isGenerating,
+  onStart: async instruction => {
+    if (activeSession.value) { followUp.value = instruction; await continueSession() }
+    else { question.value = instruction; await startSession() }
+  },
+})
+function isReviewReply(message: ChatMessage, index: number) {
+  return message.sender === 'assistant' && !message.id.startsWith('error-') && Boolean(reviewRequestId(questionForMessage(index)))
+}
+const openingReviewCourse = ref(false)
+async function openReviewCourse() {
+  if (openingReviewCourse.value || isGenerating.value || preparingClassroom.value) return
+  openingReviewCourse.value = true
+  try {
+    const session = await createReviewChatSession()
+    leaveCurrentTurn()
+    cancelMessageEdit()
+    question.value = ''
+    followUp.value = ''
+    sessions.value.unshift(session)
+    activeSession.value = session
+    await router.push({ path: '/platform/ai-chat', query: { session: session.id } })
+    await nextTick()
+    await askCourse()
+    await scrollBottom()
+    window.dispatchEvent(new CustomEvent('weknora:session-refresh'))
+  } catch {
+    MessagePlugin.error('新对话创建失败，请重试')
+  } finally { openingReviewCourse.value = false }
+}
 function toNativeAgentSession(message: ChatMessage) {
   const item = message as RenderableChatMessage
   return {
@@ -277,7 +269,7 @@ function hasAnswerOutputAfter(index: number): boolean {
   }))
 }
 function canEditMessage(message: ChatMessage, index: number): boolean {
-  return message.sender === 'user' && !isGenerating.value && !hasAnswerOutputAfter(index)
+  return message.sender === 'user' && !reviewRequestId(message.text) && !isGenerating.value && !hasAnswerOutputAfter(index)
 }
 function shouldShowVideoTitle(index: number): boolean {
   return false
@@ -294,12 +286,6 @@ function pushStreamingPlaceholder(target: ChatSession) {
   streamingAssistantId.value = assistantId
   target.messages.push({ id: assistantId, sender: 'assistant', text: '', timestamp: '刚刚' } as StreamingChatMessage)
   return assistantId
-}
-
-function beginSuggestedSession(promptText: string) {
-  if (isGenerating.value) return
-  question.value = promptText
-  void startSession()
 }
 
 function showToolMessage(label: string) {
@@ -367,35 +353,46 @@ function appendRecoveredQuestion(session: ChatSession, questionText: string): Ch
 }
 async function startSession() {
   const value = question.value.trim(); if (!value || isGenerating.value) return
+  if (isReviewIntent(value)) { question.value = ''; await openReviewCourse(); return }
+  const reinforcement = Boolean(reviewRequestId(value))
+  if (!reinforcement && preparingClassroom.value) return
+  const revision = turnRevision
   lastUserQuery.value = value
   persistPendingQuestion(value)
   question.value = ''
   followUp.value = ''
-  const session: ChatSession = { id: `pending-${Date.now()}`, title: value.slice(0, 24), type: 'chat', time: '刚刚', messages: [{ id: `user-${Date.now()}`, sender: 'user', text: value, timestamp: '刚刚' }], scope: 'global' }
+  const session: ChatSession = { id: `pending-${Date.now()}`, title: visibleReviewQuestion(value).slice(0, 24), type: 'chat', time: '刚刚', messages: [{ id: `user-${Date.now()}`, sender: 'user', text: value, timestamp: '刚刚' }], scope: 'global' }
   const assistantId = pushStreamingPlaceholder(session)
   sessions.value.unshift(session); activeSession.value = session; isGenerating.value = true; await scrollBottom()
   try {
     const created = await createChatTurn(value, {
       globalMode: true,
-      agentId: settingsStore.selectedAgentId,
-      agentEnabled: settingsStore.isAgentEnabled,
-      autoRoute: shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
-      agentSourceTenantId: settingsStore.selectedAgentSourceTenantId,
-      onSessionCreated: createdSession => materializePendingSession(session, createdSession),
-      onStreamMessage: message => updateStreamingMessage(assistantId, message),
-      onStopReady: stop => { stopCurrentTurn.value = stop },
+      agentId: reinforcement ? undefined : settingsStore.selectedAgentId,
+      agentEnabled: reinforcement || settingsStore.isAgentEnabled,
+      autoRoute: reinforcement || shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
+      agentSourceTenantId: reinforcement ? undefined : settingsStore.selectedAgentSourceTenantId,
+      skillNames: reinforcement ? ['openmaic-classroom'] : undefined,
+      onSessionCreated: createdSession => { if (revision === turnRevision) materializePendingSession(session, createdSession) },
+      onStreamMessage: message => { if (revision === turnRevision) updateStreamingMessage(assistantId, message) },
+      onStopReady: stop => { if (revision === turnRevision) stopCurrentTurn.value = stop; else void stop() },
     })
+    if (revision !== turnRevision) return
     sessions.value = sessions.value.map(item => item.id === session.id || item.id === created.id ? created : item)
     activeSession.value = created
     clearChatRecovery(recoveryStorage, CHAT_PAGE_RECOVERY_KEY)
     window.dispatchEvent(new CustomEvent('weknora:session-refresh'))
     await router.replace({ path: '/platform/ai-chat', query: { session: created.id } })
   } catch (error) {
+    if (revision !== turnRevision) return
     session.messages.push({ id: `error-${Date.now()}`, sender: 'assistant', text: error instanceof Error ? error.message : '问答生成失败，请稍后重试', timestamp: '刚刚' })
-  } finally { isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null; await scrollBottom() }
+  } finally { if (revision === turnRevision) { isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null; await scrollBottom() } }
 }
 async function continueSession() {
   const value = followUp.value.trim(); if (!value || isGenerating.value || !activeSession.value) return
+  if (isReviewIntent(value)) { followUp.value = ''; await askCourse(); await scrollBottom(); return }
+  const reinforcement = Boolean(reviewRequestId(value))
+  if (!reinforcement && preparingClassroom.value) return
+  const revision = turnRevision
   const target = activeSession.value
   lastUserQuery.value = value
   persistPendingQuestion(value, target)
@@ -405,22 +402,33 @@ async function continueSession() {
   isGenerating.value = true; await scrollBottom()
   try {
     const updated = await createChatTurn(value, {
-      globalMode: target.scope !== 'video',
-      agentId: settingsStore.selectedAgentId,
-      agentEnabled: settingsStore.isAgentEnabled,
-      autoRoute: shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
-      agentSourceTenantId: settingsStore.selectedAgentSourceTenantId,
-      currentVideo: target.videoId ? { id: target.videoId, title: target.videoTitle || '指定视频', category: 'general', categoryName: '通用分享', duration: '', durationSeconds: 0, created_at: '', video_url: '', poster_url: target.videoCoverUrl, overview: '', chapters: [], subtitles: [] } : undefined,
+      globalMode: reinforcement || target.scope !== 'video',
+      agentId: reinforcement ? undefined : settingsStore.selectedAgentId,
+      agentEnabled: reinforcement || settingsStore.isAgentEnabled,
+      autoRoute: reinforcement || shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
+      agentSourceTenantId: reinforcement ? undefined : settingsStore.selectedAgentSourceTenantId,
+      skillNames: reinforcement ? ['openmaic-classroom'] : undefined,
+      currentVideo: !reinforcement && target.videoId ? { id: target.videoId, title: target.videoTitle || '指定视频', category: 'general', categoryName: '通用分享', duration: '', durationSeconds: 0, created_at: '', video_url: '', poster_url: target.videoCoverUrl, overview: '', chapters: [], subtitles: [] } : undefined,
       session: target,
-      onStreamMessage: message => updateStreamingMessage(assistantId, message),
-      onStopReady: stop => { stopCurrentTurn.value = stop },
+      onStreamMessage: message => { if (revision === turnRevision) updateStreamingMessage(assistantId, message) },
+      onStopReady: stop => { if (revision === turnRevision) stopCurrentTurn.value = stop; else void stop() },
     })
-    activeSession.value = updated
-    sessions.value = [updated, ...sessions.value.filter(item => item.id !== updated.id)]
+    if (revision !== turnRevision) return
+    const completed = reinforcement ? {
+      ...updated,
+      type: target.type,
+      scope: target.scope,
+      videoId: target.videoId,
+      videoTitle: target.videoTitle,
+      videoCoverUrl: target.videoCoverUrl,
+    } : updated
+    activeSession.value = completed
+    sessions.value = [completed, ...sessions.value.filter(item => item.id !== completed.id)]
     clearChatRecovery(recoveryStorage, CHAT_PAGE_RECOVERY_KEY)
   } catch (error) {
+    if (revision !== turnRevision) return
     target.messages.push({ id: `error-${Date.now()}`, sender: 'assistant', text: error instanceof Error ? error.message : '问答生成失败，请稍后重试', timestamp: '刚刚' })
-  } finally { isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null; await scrollBottom() }
+  } finally { if (revision === turnRevision) { isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null; await scrollBottom() } }
 }
 async function openSession(session: ChatSession) {
   cancelMessageEdit()
@@ -454,7 +462,7 @@ async function restorePendingChat() {
   const pending = readChatRecovery(recoveryStorage, CHAT_PAGE_RECOVERY_KEY)
   if (!pending) return
   if (!pending.sessionId) {
-    question.value = pending.question
+    question.value = reviewRequestId(pending.question) ? '' : pending.question
     return
   }
   try {
@@ -463,7 +471,7 @@ async function restorePendingChat() {
     sessions.value = refreshed
     const target = refreshed.find(item => item.id === pending.sessionId)
     if (!target) {
-      question.value = pending.question
+      question.value = reviewRequestId(pending.question) ? '' : pending.question
       return
     }
     const loaded = await loadChatSession(target)
@@ -473,10 +481,11 @@ async function restorePendingChat() {
     clearChatRecovery(recoveryStorage, CHAT_PAGE_RECOVERY_KEY)
     void scrollBottom()
   } catch {
-    question.value = pending.question
+    question.value = reviewRequestId(pending.question) ? '' : pending.question
   }
 }
 function back() {
+  leaveCurrentTurn()
   cancelMessageEdit()
   activeSession.value = null
   followUp.value = ''
@@ -489,6 +498,7 @@ function navigateToEvidence(videoId: string, seconds: number) {
   router.push(`/platform/videos/${videoId}?t=${Math.floor(seconds)}`)
 }
 watch(sessionQueryId, async (sessionId) => {
+  if (sessionId !== activeSession.value?.id) leaveCurrentTurn()
   if (!sessionListReady.value) return
   if (!sessionId) {
     conversationLoading.value = false
@@ -528,6 +538,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.chat-review-chooser { margin-bottom: 16px; }
 .chat-page {
   position: relative;
   isolation: isolate;
@@ -641,107 +652,20 @@ onMounted(async () => {
   color: var(--td-text-color-placeholder);
 }
 
-.suggestions {
-  margin-top: 30px;
-}
+.review-entry { display: flex; width: min(320px, 100%); min-height: 84px; margin-top: 16px; align-items: center; gap: 15px; padding: 18px 20px; border: 1px solid rgba(255,255,255,.9); border-radius: 12px; background: rgba(255,255,255,.42); backdrop-filter: blur(26px) saturate(112%); color: var(--td-text-color-primary); cursor: pointer; text-align: left; transition: background .2s ease, box-shadow .2s ease; }
+.review-entry:hover:not(:disabled) { background: rgba(255,255,255,.58); box-shadow: 0 4px 16px rgba(0,0,0,.06); }
+.review-entry:focus-visible { outline: 2px solid var(--td-brand-color); outline-offset: 3px; }
+.review-entry__icon { width: 38px; height: 38px; flex: 0 0 auto; color: #f0b070; }
+.review-entry__copy { display: flex; flex-direction: column; gap: 3px; }
+.review-entry__copy strong { font-size: 16px; font-weight: 500; line-height: 24px; }
+.review-entry__copy small { font-size: 12px; font-weight: 400; line-height: 20px; color: var(--td-text-color-secondary); white-space: nowrap; }
+.review-entry--conversation { width: fit-content; min-width: 176px; min-height: 52px; margin-top: 10px; padding: 10px 16px; border-radius: var(--td-radius-large); gap: 10px; }
+.review-entry--conversation .review-entry__icon { width: 26px; height: 26px; }
+.review-entry--conversation .review-entry__copy { gap: 0; }
+.review-entry--conversation .review-entry__copy strong { font: var(--td-font-body-medium); }
+.review-entry--conversation .review-entry__copy small { display: none; }
+.review-entry:disabled { cursor: not-allowed; opacity: .5; }
 
-.suggestions__heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 0 2px 12px;
-}
-
-.suggestions__title {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--td-text-color-secondary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.suggestions__spark,
-.suggestion-card__icon {
-  display: grid;
-  place-items: center;
-  color: var(--td-brand-color);
-}
-
-.suggestions__spark {
-  width: 17px;
-  height: 17px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--td-brand-color) 12%, transparent);
-  font-size: 13px;
-}
-
-.suggestions__note {
-  color: var(--td-text-color-placeholder);
-  font-size: 11px;
-}
-
-.suggestions__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.suggestion-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  min-height: 78px;
-  padding: 13px 15px;
-  border: 1px solid rgba(255,255,255,.84);
-  border-radius: var(--td-radius-large);
-  color: var(--td-text-color-primary);
-  background: rgba(255,255,255,.48);
-  box-shadow: 0 4px 14px rgba(27,37,31,.035);
-  text-align: left;
-  cursor: pointer;
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  transition: border-color .18s ease, background .18s ease, transform .18s ease, box-shadow .18s ease;
-}
-
-.suggestion-card:hover {
-  border-color: color-mix(in srgb, var(--td-brand-color) 30%, transparent);
-  background: rgba(255,255,255,.76);
-  box-shadow: 0 10px 24px rgba(27,37,31,.08);
-  transform: translateY(-2px);
-}
-
-.suggestion-card__icon {
-  width: 27px;
-  height: 27px;
-  flex: 0 0 27px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--td-brand-color) 12%, transparent);
-  font-size: 14px;
-}
-
-.suggestion-card__content {
-  display: grid;
-  min-width: 0;
-  padding-top: 1px;
-}
-
-.suggestion-card__text {
-  font-size: 13px;
-  line-height: 20px;
-}
-
-.suggestion-card__meta {
-  display: block;
-  margin-top: 4px;
-  overflow: hidden;
-  color: var(--td-text-color-placeholder);
-  font-size: 11px;
-  line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .chat-composer footer {
   display: flex;
@@ -1020,7 +944,6 @@ onMounted(async () => {
 @media (max-width: 640px) {
   .chat-page { padding: 20px 16px; }
   .chat-landing h1 { margin-bottom: 26px; font-size: 31px; }
-  .suggestions__grid { grid-template-columns: 1fr; }
   .message__bubble { max-width: 88%; }
   .message--assistant .message__bubble { max-width: none; }
   .conversation-composer {

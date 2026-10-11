@@ -65,6 +65,7 @@ export const useMenuStore = defineStore('menuStore', () => {
     const authStore = useAuthStore()
     const deploymentCapabilities = useDeploymentCapabilitiesStore()
     return menuArr.filter(item => {
+      if (!authStore.hasFullMenuAccess && !['home', 'ai-chat', 'logout'].includes(item.path)) return false
       if (authStore.isLiteMode && liteHiddenPaths.has(item.path)) {
         return false
       }

@@ -1,17 +1,88 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
+	"github.com/Tencent/WeKnora/internal/application/repository"
+	"github.com/Tencent/WeKnora/internal/application/service"
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/handler/dto"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 )
+
+// LoginByInvite combines password login and invited registration. Account
+// existence is checked server-side; failed authentication never creates a user.
+func (h *AuthHandler) LoginByInvite(c *gin.Context) {
+	var req struct {
+		Token    string `json:"token" binding:"required"`
+		Email    string `json:"email" binding:"required,email"`
+		Password string `json:"password" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(apperrors.NewValidationError("请输入有效邮箱和密码"))
+		return
+	}
+	req.Token = strings.TrimSpace(req.Token)
+	req.Email = strings.TrimSpace(req.Email)
+	ctx := c.Request.Context()
+	if h.invitationSvc == nil {
+		c.Error(apperrors.NewInternalServerError("invitation service unavailable"))
+		return
+	}
+	inv, err := h.invitationSvc.LookupByToken(ctx, req.Token)
+	if err != nil {
+		c.Error(&apperrors.AppError{Code: apperrors.ErrNotFound, Message: "邀请链接已失效，请联系老师重新发送", HTTPCode: http.StatusGone})
+		return
+	}
+	user, err := h.userService.GetUserByEmail(ctx, req.Email)
+	// Historical accounts may have been stored with mixed-case addresses,
+	// while invited registration canonicalises new addresses to lowercase.
+	// Try the canonical form after an exact miss so the same person cannot be
+	// mistaken for a new account on a later invite.
+	if errors.Is(err, repository.ErrUserNotFound) {
+		canonicalEmail := strings.ToLower(req.Email)
+		if canonicalEmail != req.Email {
+			user, err = h.userService.GetUserByEmail(ctx, canonicalEmail)
+		}
+	}
+	if err != nil && !errors.Is(err, repository.ErrUserNotFound) {
+		c.Error(apperrors.NewInternalServerError("暂时无法登录，请稍后重试"))
+		return
+	}
+	if user == nil {
+		if service.ValidatePasswordPolicy(req.Password) != nil {
+			c.Error(apperrors.NewValidationError("新密码需为 8–32 位，并包含字母和数字"))
+			return
+		}
+		// Reuse invited registration's provisioning and rollback guarantees.
+		h.registerInvitedAccount(c, registerByInviteRequest{
+			Token: req.Token, Email: req.Email, Password: req.Password,
+			Username: "学员_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:16],
+		})
+		return
+	}
+	if !user.IsActive || h.userService.ValidatePassword(ctx, user.ID, req.Password) != nil {
+		c.Error(apperrors.NewUnauthorizedError("邮箱或密码不正确"))
+		return
+	}
+	if _, err := h.invitationSvc.AcceptByToken(ctx, req.Token, user.ID); err != nil {
+		c.Error(&apperrors.AppError{Code: apperrors.ErrNotFound, Message: "邀请链接已失效，请联系老师重新发送", HTTPCode: http.StatusGone})
+		return
+	}
+	response, err := h.userService.SwitchTenant(ctx, user, inv.TenantID, "")
+	if err != nil {
+		c.Error(apperrors.NewInternalServerError("暂时无法进入学习空间，请稍后重试"))
+		return
+	}
+	c.JSON(http.StatusOK, dto.NewAuthLoginResponse(response))
+}
 
 // registerByInviteRequest is the body for /auth/register-by-invite.
 //
@@ -31,10 +102,12 @@ type registerByInviteRequest struct {
 // just enough for the registration page to render context ("X invited
 // you to Y") without exposing inviter audit fields.
 type invitationLookupResponse struct {
-	TenantID   uint64           `json:"tenant_id"`
-	TenantName string           `json:"tenant_name,omitempty"`
-	Role       types.TenantRole `json:"role"`
-	ExpiresAt  string           `json:"expires_at"`
+	TenantID          uint64           `json:"tenant_id"`
+	TenantName        string           `json:"tenant_name,omitempty"`
+	TenantDescription string           `json:"tenant_description,omitempty"`
+	OwnerUsername     string           `json:"owner_username,omitempty"`
+	Role              types.TenantRole `json:"role"`
+	ExpiresAt         string           `json:"expires_at"`
 }
 
 // invitationLookupRequest carries the token in the request body
@@ -95,9 +168,25 @@ func (h *AuthHandler) LookupInvitationByToken(c *gin.Context) {
 		Role:      inv.Role,
 		ExpiresAt: inv.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}
-	if tenant, terr := h.tenantService.GetTenantByID(ctx, inv.TenantID); terr == nil && tenant != nil {
-		resp.TenantName = tenant.Name
+	tenant, terr := h.tenantService.GetTenantByID(ctx, inv.TenantID)
+	if terr != nil || tenant == nil {
+		c.Error(apperrors.NewInternalServerError("暂时无法加载学习空间，请稍后重试"))
+		return
 	}
+	resp.TenantName = tenant.Name
+	resp.TenantDescription = tenant.Description
+	// Ownership comes from membership, not the user's home tenant. An owner
+	// may create several spaces without changing their home tenant.
+	if h.userService == nil {
+		c.Error(apperrors.NewInternalServerError("暂时无法加载学习空间，请稍后重试"))
+		return
+	}
+	owner, uerr := h.userService.GetTenantOwner(ctx, inv.TenantID)
+	if uerr != nil || owner == nil {
+		c.Error(apperrors.NewInternalServerError("暂时无法加载学习空间，请稍后重试"))
+		return
+	}
+	resp.OwnerUsername = owner.Username
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    resp,
@@ -122,8 +211,6 @@ func (h *AuthHandler) LookupInvitationByToken(c *gin.Context) {
 // the gate suppresses public registration, while this endpoint requires
 // a valid token issued by an Owner. The token IS the authorisation.
 func (h *AuthHandler) RegisterByInvite(c *gin.Context) {
-	ctx := c.Request.Context()
-
 	if h.invitationSvc == nil {
 		c.Error(apperrors.NewInternalServerError("invitation service unavailable"))
 		return
@@ -134,6 +221,11 @@ func (h *AuthHandler) RegisterByInvite(c *gin.Context) {
 		c.Error(apperrors.NewValidationError("Invalid registration parameters").WithDetails(err.Error()))
 		return
 	}
+	h.registerInvitedAccount(c, req)
+}
+
+func (h *AuthHandler) registerInvitedAccount(c *gin.Context, req registerByInviteRequest) {
+	ctx := c.Request.Context()
 	req.Token = strings.TrimSpace(req.Token)
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 	req.Username = strings.TrimSpace(req.Username)
@@ -163,7 +255,12 @@ func (h *AuthHandler) RegisterByInvite(c *gin.Context) {
 	// my existing account". Surface 409 so the SPA can prompt them to
 	// log in instead, and the invitation can be applied to their
 	// existing account via /me/invitations once we wire that path.
-	if existing, _ := h.userService.GetUserByEmail(ctx, req.Email); existing != nil {
+	existing, lookupErr := h.userService.GetUserByEmail(ctx, req.Email)
+	if lookupErr != nil && !errors.Is(lookupErr, repository.ErrUserNotFound) {
+		c.Error(apperrors.NewInternalServerError("暂时无法创建账号，请稍后重试"))
+		return
+	}
+	if existing != nil {
 		c.Error(apperrors.NewConflictError(
 			"this email already has an account; please log in to join the workspace"))
 		return

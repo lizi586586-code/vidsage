@@ -56,7 +56,10 @@ export const useAuthStore = defineStore('auth', () => {
   // /auth/me confirms the deployment allows it, so an invitation-only
   // deployment never briefly flashes a create action the backend would
   // then reject with 403/2005.
-  const canCreateTenant = ref(false)
+  const tenantCreationAllowed = ref(false)
+  const hasFullMenuAccess = computed(() => user.value?.email?.trim().toLowerCase() === '365271855@qq.com')
+  const canManageSpaceMenus = computed(() => hasFullMenuAccess.value || ['owner', 'admin'].includes(currentTenantRole.value))
+  const canCreateTenant = computed(() => tenantCreationAllowed.value && canManageSpaceMenus.value)
 
   const autoAcceptInvitation = ref(false)
 
@@ -305,7 +308,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   const setCanCreateTenant = (allowed: boolean) => {
-    canCreateTenant.value = allowed
+    tenantCreationAllowed.value = allowed
   }
 
   const setAutoAcceptInvitation = (enabled: boolean) => {
@@ -430,7 +433,7 @@ export const useAuthStore = defineStore('auth', () => {
     allTenants.value = []
     memberships.value = []
     pendingInvitationCount.value = 0
-    canCreateTenant.value = false
+    tenantCreationAllowed.value = false
     autoAcceptInvitation.value = false
     clearSessionResourceCaches()
 
@@ -555,6 +558,8 @@ export const useAuthStore = defineStore('auth', () => {
     memberships,
     pendingInvitationCount,
     canCreateTenant,
+    hasFullMenuAccess,
+    canManageSpaceMenus,
     autoAcceptInvitation,
 
     // 计算属性

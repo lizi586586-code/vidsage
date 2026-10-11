@@ -568,6 +568,29 @@ func (s *userService) GetUsersByIDs(ctx context.Context, ids []string) (map[stri
 	return s.userRepo.GetUsersByIDs(ctx, ids)
 }
 
+// GetTenantOwner resolves ownership independently of a user's home tenant.
+func (s *userService) GetTenantOwner(ctx context.Context, tenantID uint64) (*types.User, error) {
+	if s.memberService == nil {
+		return nil, apprepo.ErrUserNotFound
+	}
+	members, err := s.memberService.ListByTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, member := range members {
+		if member != nil && member.Status == types.TenantMemberStatusActive && member.Role == types.TenantRoleOwner {
+			owner, err := s.userRepo.GetUserByID(ctx, member.UserID)
+			if err != nil {
+				return nil, err
+			}
+			if owner != nil && owner.IsActive {
+				return owner, nil
+			}
+		}
+	}
+	return nil, apprepo.ErrUserNotFound
+}
+
 // GetUserByEmail gets a user by email
 func (s *userService) GetUserByEmail(ctx context.Context, email string) (*types.User, error) {
 	return s.userRepo.GetUserByEmail(ctx, email)

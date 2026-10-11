@@ -68,11 +68,11 @@
         </div>
         <div class="menu-divider"></div>
         <!-- 账号与空间是头像菜单的核心上下文；基础设施类配置统一收进「全部设置」。 -->
-        <div class="menu-item" @click="handleQuickNav('general')">
+        <div class="menu-item" @click="handleQuickNav(authStore.hasFullMenuAccess ? 'general' : 'userprofile')">
           <t-icon name="user" class="menu-icon" />
           <span>{{ $t('general.personalSettings') }}</span>
         </div>
-        <div v-if="!authStore.isLiteMode" class="menu-item" @click="handleQuickNav('tenant')">
+        <div v-if="!authStore.isLiteMode && authStore.canManageSpaceMenus" class="menu-item" @click="handleQuickNav('tenant')">
           <t-icon name="user-circle" class="menu-icon" />
           <span>{{ $t('settings.workspaceSettings') }}</span>
         </div>
@@ -86,8 +86,8 @@
           <t-icon name="control-platform" class="menu-icon" />
           <span>{{ $t('settings.modelManagement') }}</span>
         </div>
-        <div class="menu-divider"></div>
-        <div class="menu-item" @click="handleSettings">
+        <div v-if="authStore.hasFullMenuAccess" class="menu-divider"></div>
+        <div v-if="authStore.hasFullMenuAccess" class="menu-item" @click="handleSettings">
           <t-icon name="setting" class="menu-icon" />
           <span>{{ $t('general.allSettings') }}</span>
         </div>
@@ -97,12 +97,12 @@
           including tenant Owners. Real authorisation lives server-side
           (RequireSystemAdmin middleware); this is UI gating only.
         -->
-        <div v-if="authStore.isSystemAdmin" class="menu-item" @click="handleSystemAdmin">
+        <div v-if="authStore.hasFullMenuAccess && authStore.isSystemAdmin" class="menu-item" @click="handleSystemAdmin">
           <t-icon name="server" class="menu-icon" />
           <span>{{ $t('settings.navGroups.systemAdministration') }}</span>
         </div>
-        <div class="menu-divider"></div>
-        <div class="menu-item" @click="openDocs">
+        <div v-if="authStore.hasFullMenuAccess" class="menu-divider"></div>
+        <div v-if="authStore.hasFullMenuAccess" class="menu-item" @click="openDocs">
           <t-icon name="help-circle" class="menu-icon" />
           <span class="menu-text-with-icon">
             <span>{{ $t('general.helpAndDocs') }}</span>
@@ -112,7 +112,7 @@
             </svg>
           </span>
         </div>
-        <div class="menu-item" :title="$t('common.githubStarTip')" @click="openGithub">
+        <div v-if="authStore.hasFullMenuAccess" class="menu-item" :title="$t('common.githubStarTip')" @click="openGithub">
           <t-icon name="logo-github" class="menu-icon" />
           <span class="menu-text-with-icon">
             <span>{{ $t('common.github') }}</span>
@@ -207,7 +207,6 @@ import {
 import type { TenantInfo } from '@/api/tenant'
 import { useRoleLabel, useHomeTenant } from '@/composables/useRoleLabel'
 import { getRootZoom, rectToCssPx, cssViewportSize } from '@/utils/zoom'
-import { SETTINGS_MANAGEMENT_SHORTCUT_MIN_ROLE } from '@/config/settingsAccess'
 
 const { t } = useI18n()
 
@@ -242,12 +241,10 @@ const showTenantIdentityLine = computed(() => {
 // 快捷入口使用“管理能力”而不是页面最低可见角色：成员名册和模型列表允许
 // viewer 浏览，但头像菜单里的“管理”入口只服务实际能执行管理操作的角色。
 const canManageMembers = computed(() =>
-  authStore.canAccessAllTenants || authStore.hasRole(SETTINGS_MANAGEMENT_SHORTCUT_MIN_ROLE.members),
+  authStore.canManageSpaceMenus,
 )
 const canManageModels = computed(() =>
-  authStore.canAccessAllTenants ||
-  authStore.isSystemAdmin ||
-  authStore.hasRole(SETTINGS_MANAGEMENT_SHORTCUT_MIN_ROLE.models),
+  authStore.hasFullMenuAccess,
 )
 
 const menuRef = ref<HTMLElement>()

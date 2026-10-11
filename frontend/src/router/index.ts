@@ -61,12 +61,7 @@ const router = createRouter({
     {
       path: "/register",
       name: "registerByInvite",
-      // Share-link landing page reuses the Login form: the same Vue
-      // component renders both modes and detects ?token=xxx on mount
-      // to switch into invite-register flow. Avoids a parallel page
-      // that would duplicate the OIDC / language-switch / styling
-      // surface for one extra field.
-      component: () => import("../views/auth/Login.vue"),
+      component: () => import("../views/auth/InviteLanding.vue"),
       meta: { requiresAuth: false, requiresInit: false }
     },
     {
@@ -432,6 +427,14 @@ router.beforeEach(async (to, from, next) => {
 
   if (to.meta.requiresTenant !== false && !authStore.hasValidTenant) {
     next('/onboarding/workspace')
+    return
+  }
+
+  if (!authStore.hasFullMenuAccess && (
+    to.path === '/knowledgeBase' ||
+    /^\/platform\/(graph|queries|knowledge-bases|agents|organizations)(\/|$)/.test(to.path)
+  )) {
+    next('/platform/videos')
     return
   }
 

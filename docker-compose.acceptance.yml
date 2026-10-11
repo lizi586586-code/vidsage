@@ -20,6 +20,9 @@ services:
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       DOCREADER_ADDR: ${DOCREADER_ADDR:-docreader:50051}
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
+      # Allow only the dedicated local MCP bridge. This is merged with the
+      # upstream compose defaults by WeKnora's SSRF policy at runtime.
+      SSRF_WHITELIST_EXTRA: ${SSRF_WHITELIST_EXTRA:-searxng,qdrant,milvus,weaviate,doris-fe,doris-be,minio,openmaic-mcp}
     volumes:
       - weknora-data-files:/data/files
       - weknora-docreader-tmp:/tmp/docreader:ro
@@ -85,6 +88,7 @@ services:
       WEKNORA_BASE_URL: http://app:8080
       WEKNORA_API_KEY: ${WEKNORA_API_KEY:-}
       CONTENT_PIPELINE_AUDIT_SECRET: ${CONTENT_PIPELINE_AUDIT_SECRET:-}
+      OPENMAIC_BRIDGE_SECRET: ${OPENMAIC_BRIDGE_SECRET:-}
       WEKNORA_KB_ID: ${WEKNORA_KB_ID:-}
       WEKNORA_EVIDENCE_KB_ID: ${WEKNORA_EVIDENCE_KB_ID:-}
       WEKNORA_KNOWLEDGE_KB_ID: ${WEKNORA_KNOWLEDGE_KB_ID:-}
@@ -177,12 +181,38 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  openmaic-mcp:
+    build:
+      context: .
+      dockerfile: tools/openmaic-mcp/Dockerfile
+    image: weknora/openmaic-mcp:acceptance
+    container_name: vidsage-openmaic-mcp
+    environment:
+      OPENMAIC_BASE_URL: https://open.maic.chat
+      OPENMAIC_ACCESS_CODE: ${OPENMAIC_ACCESS_CODE:-}
+      OPENMAIC_BRIDGE_SECRET: ${OPENMAIC_BRIDGE_SECRET:-}
+      WEKNORA_CUSTOM_BASE_URL: http://custom-backend:8090
+      OPENMAIC_JOB_JOURNAL: /app/data/openmaic-jobs.json
+      PORT: "3000"
+    volumes:
+      - openmaic-jobs:/app/data
+    networks:
+      - acceptance-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
 networks:
   acceptance-network:
     name: ${LOCAL_ACCEPTANCE_OFFICIAL_NETWORK:-weknora_WeKnora-network}
     external: true
 
 volumes:
+  openmaic-jobs:
   weknora-data-files:
     external: true
     name: ${LOCAL_ACCEPTANCE_DATA_VOLUME:-weknora_data-files}

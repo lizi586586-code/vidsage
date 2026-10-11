@@ -489,6 +489,8 @@ export async function validateToken(): Promise<{ success: boolean; valid?: boole
 export interface InviteLookup {
   tenant_id: number
   tenant_name?: string
+  tenant_description?: string
+  owner_username?: string
   role: string
   expires_at: string
 }
@@ -534,5 +536,14 @@ export async function registerByInvite(data: RegisterByInviteRequest): Promise<L
     return response as unknown as LoginResponse
   } catch (error: any) {
     return { success: false, message: error.message || t('error.auth.registerFailed') }
+  }
+}
+
+export async function loginByInvite(data: { token: string; email: string; password: string }): Promise<LoginResponse> {
+  try {
+    const response = await post('/api/v1/auth/login-by-invite', data)
+    return response as unknown as LoginResponse
+  } catch (error: any) {
+    return { success: false, message: error.message || t('error.auth.loginFailed') }
   }
 }

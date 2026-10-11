@@ -26,6 +26,10 @@
 # 其它镜像(app/docreader/sandbox)的 Dockerfile 都不引用 frontend/,
 # 所以这里可以直接排除整个 frontend/ 目录。
 **/node_modules/
+# openmaic-mcp is built from locally verified JavaScript dependencies because
+# this host's Docker daemon cannot reach the public registry.
+!tools/openmaic-mcp/node_modules/
+!tools/openmaic-mcp/node_modules/**
 frontend/
 WeKnora-Chrome-Extension/
 

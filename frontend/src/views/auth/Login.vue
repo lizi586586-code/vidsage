@@ -40,7 +40,8 @@
                 {{ loading ? $t('auth.loggingIn') : $t('auth.login') }}
               </t-button>
 
-              <div class="register-cta" v-if="registrationEnabled" hidden>
+              <p v-if="props.inviteLoginFirst" class="form-subtitle invite-login-hint">首次登录自动注册账号并加入空间；已有账号请使用原密码。</p>
+              <div class="register-cta" v-if="registrationEnabled && !props.inviteLoginFirst" hidden>
                 <div class="register-cta__divider">
                   <span>{{ $t('auth.firstTime') }}</span>
                 </div>
@@ -156,6 +157,7 @@ import {
   userInfoFromApi,
   getInvitationByToken,
   registerByInvite,
+  loginByInvite,
   type InviteLookup,
 } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
@@ -168,11 +170,14 @@ import screenshot3 from '@/assets/img/screenshot-3.svg'
 import screenshot4 from '@/assets/img/screenshot-4.svg'
 
 const router = useRouter()
-defineProps<{ embedded?: boolean }>()
+const props = defineProps<{ embedded?: boolean; inviteLoginFirst?: boolean }>()
 const route = useRoute()
 const authStore = useAuthStore()
 const { t, tm, locale } = useI18n()
 const { formatRole, roleIcon } = useRoleLabel()
+let componentActive = true
+onBeforeUnmount(() => { componentActive = false })
+const invitationStillCurrent = (token: string) => componentActive && String(route.query.token || '').trim() === token
 
 // Swiper modules
 const modules = [Autoplay, EffectFade, Pagination]
@@ -265,7 +270,9 @@ const formRules = computed(() => ({
     { required: true, message: t('auth.emailRequired'), type: 'error' },
     { email: true, message: t('auth.emailInvalid'), type: 'error' }
   ],
-  password: [
+  password: props.inviteLoginFirst ? [
+    { required: true, message: t('auth.passwordRequired'), type: 'error' }
+  ] : [
     { required: true, message: t('auth.passwordRequired'), type: 'error' },
     { min: 8, message: t('auth.passwordMinLength'), type: 'error' },
     { max: 32, message: t('auth.passwordMaxLength'), type: 'error' },
@@ -346,7 +353,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', handleClickOutside)
 })
 
-const persistLoginResponse = async (response: any, skipRedirect = false) => {
+const persistLoginResponse = async (response: any, skipRedirect = false, isStillCurrent?: () => boolean) => {
   // Backend renamed `tenant` to `active_tenant` and added `memberships`
   // when tenant-level RBAC landed (issue #1303). The two are otherwise
   // identical — `active_tenant` is the tenant whose ID is encoded in the
@@ -395,7 +402,9 @@ const persistLoginResponse = async (response: any, skipRedirect = false) => {
   // Pull runtime capabilities (including whether ordinary users may create
   // workspaces) before entering the main UI so create actions never flash
   // briefly when the deployment is invitation-only.
+  if (isStillCurrent && !isStillCurrent()) return
   await authStore.refreshFromAuthMe()
+  if (isStillCurrent && !isStillCurrent()) return
   await nextTick()
   if (skipRedirect) return
   router.replace(authStore.hasValidTenant ? '/platform/knowledge-bases' : '/onboarding/workspace')
@@ -452,10 +461,14 @@ const handleOIDCLogin = async () => {
 
 // 用 token 加入空间并进入应用。会话此时已有效，故即便 token 失效也照常进入（避免困在登录页）。
 const acceptAndEnter = async (token: string) => {
+  if (!invitationStillCurrent(token)) return
   loading.value = true
+  let joined = false
   try {
     const result = await authStore.acceptInvitationByTokenAndRefresh(token)
+    if (!invitationStillCurrent(token)) return
     if (result.ok) {
+      joined = true
       MessagePlugin.success(t('inviteRegister.joined'))
     } else {
       MessagePlugin.warning(t('inviteRegister.invalidBody'))
@@ -465,7 +478,9 @@ const acceptAndEnter = async (token: string) => {
   } finally {
     loading.value = false
     await nextTick()
-    router.replace('/platform/knowledge-bases')
+    if (invitationStillCurrent(token) && (joined || !props.inviteLoginFirst)) {
+      router.replace(props.inviteLoginFirst ? '/platform/videos' : '/platform/knowledge-bases')
+    }
   }
 }
 
@@ -477,16 +492,18 @@ const handleLogin = async () => {
 
     loading.value = true
 
-    const response = await login({
-      email: formData.email,
-      password: formData.password,
-    })
+    const submittedToken = inviteToken.value
+    const response = submittedToken
+      ? await loginByInvite({ token: submittedToken, email: formData.email, password: formData.password })
+      : await login({ email: formData.email, password: formData.password })
+    if (submittedToken && !invitationStillCurrent(submittedToken)) return
 
     if (response.success) {
       if (inviteToken.value) {
-        // 从邀请链接登录：持久化会话后兑换 token 并进入对应空间。
-        await persistLoginResponse(response, true)
-        await acceptAndEnter(inviteToken.value)
+        // 邀请登录接口已完成注册或加入，进入该空间的视频列表。
+        await persistLoginResponse(response, true, () => invitationStillCurrent(submittedToken))
+        if (!invitationStillCurrent(submittedToken)) return
+        router.replace('/platform/videos')
         return
       }
       await persistLoginResponse(response)
@@ -577,6 +594,7 @@ onMounted(async () => {
     // 1. 先校验 token：无效/过期则停在登录页报错，不进注册模式。
     try {
       const resp = await getInvitationByToken(tokenFromQuery)
+      if (!invitationStillCurrent(tokenFromQuery)) return
       if (resp.success && resp.data) {
         inviteLookup.value = resp.data
       } else {
@@ -595,16 +613,15 @@ onMounted(async () => {
     }
 
     // 2. 已登录则直接兑换 token 进入空间（两种模式通用）。
-    if (authStore.isLoggedIn && (await authStore.refreshFromAuthMe())) {
+    if (!invitationStillCurrent(tokenFromQuery)) return
+    if (authStore.isLoggedIn && (await authStore.refreshFromAuthMe()) && invitationStillCurrent(tokenFromQuery)) {
       await acceptAndEnter(tokenFromQuery)
       return
     }
 
     // 3. 未登录：按注册模式决定界面。invite_only 停在登录页、登录后再兑换；self_serve 保持注册流程。
-    const cfg = await getAuthConfig()
-    const inviteOnly = cfg.registration_mode === 'invite_only'
-    registrationEnabled.value = !inviteOnly
-    isRegisterMode.value = !inviteOnly
+    await loadAuthConfig()
+    isRegisterMode.value = props.inviteLoginFirst ? false : registrationEnabled.value
     loadOIDCConfig()
     return
   }

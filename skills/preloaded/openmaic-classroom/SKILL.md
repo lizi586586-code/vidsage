@@ -7,6 +7,19 @@ description: 将 RAG 检索结果、文档块或知识图谱概念转换为 Open
 
 将 WeKnora 知识库中的 RAG 检索结果或文档内容转换为 OpenMAIC 互动课程。
 
+## WeKnora「巩固知识」入口（优先分支）
+
+请求包含后台登记的 `request_id` 时，执行此分支后结束，跳过下方通用生成流程。
+
+1. 在工具列表中找到名称以 `openmaic_start_learning_course` 结尾的已部署 MCP 工具。不可用时明确告知课程入口未配置，结束任务。
+2. 调用一次，参数仅为 `{"request_id":"逐字复制请求中的任务 ID"}`。后台已经使用当前登录学员权限读取课程资料、原始 PDF（若来源是 PDF）、有效教学偏好和课程要求；不要重新编造输入、邮箱或身份。
+3. 工具返回成功后，告知「课程正在后台生成，链接准备好后会自动显示」。后台持续查询生成任务，不依赖本次对话继续运行。
+4. 工具返回失败时，告知任务未能提交；保留稳定错误码供排查。同一任务不重新创建远程课程；需要重新发起时由用户再次点击入口。
+
+页面只读取后台任务结果，不解析 AI 文本或结果标记。发布的链接必须来自真实成功任务；生成中展示进度。
+学习完成需要 OpenMAIC 开放逐学员授权的整课记录契约。目前托管服务尚未验证此能力，页面显示「学习状态暂不可同步」，不能承诺自动完成回传。
+工具与任务契约见 [API 参考](references/api-reference.md#weknora-巩固知识任务契约)。
+
 ## 核心能力
 
 1. **RAG → 课程**: 将知识检索结果提炼为教学需求（requirement），通过 OpenMAIC API 生成互动课程
@@ -183,24 +196,18 @@ execute_skill_script(
 
 ### Phase 2: 构建 Generation Request
 
-根据输入源构建请求体，**字段说明**：
+OpenMAIC 当前服务端生成接口只接受以下字段。不要发送旧版的 `pdfContent`、`language`、`enableWebSearch`、`enableImageGeneration`、`enableVideoGeneration`、`enableTTS` 或 `agentMode`；服务端会拒绝 `pdfContent`，其他未知字段也不能作为功能开关使用。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `requirement` | string | 是 | 教学主题描述，1-2 句话 |
-| `pdfContent` | object | 否 | PDF 解析后的文本和图片 |
-| `language` | string | 否 | `"zh-CN"` 或 `"en-US"`，默认 `"zh-CN"` |
-| `enableWebSearch` | bool | 否 | 是否启用网络搜索，默认 false |
-| `enableImageGeneration` | bool | 否 | 是否生成配图，默认 false |
-| `enableVideoGeneration` | bool | 否 | 是否生成视频，默认 false |
-| `enableTTS` | bool | 否 | 是否生成语音朗读，默认 false |
-| `agentMode` | string | 否 | `"default"` 或 `"generate"`，默认 `"default"` |
+| `requirement` | string | 是 | 教学主题、目标受众、案例和互动要求 |
+| `materialIds` | string[] | 否 | `POST /api/materials` 返回的材料 ID，最多 5 个 |
 
 场景适配：
-- **场景 1（纯需求）**: `requirement` 直接使用用户描述
-- **场景 2（RAG 结果）**: `requirement` 使用 Phase 1.1 脚本输出中的 `requirement` 字段
-- **场景 3（PDF）**: `requirement` 根据 PDF 提取的文本构建，`pdfContent` 填入解析结果
-- **场景 4（概念图遍历）**: `requirement` 使用 Phase 1.2 脚本输出中的 `requirement` 字段，每个 concept 单独调用 API
+- **场景 1（纯需求）**：只发送 `requirement`
+- **场景 2（RAG 结果）**：把检索结果整理进 `requirement`，必要时只上传有明确来源的材料
+- **场景 3（PDF）**：先以原始 PDF 请求 `POST /api/materials`，等待材料抽取状态为 `ready`，再把返回的 `materialId` 放入 `materialIds`；不要发送 `pdfContent`
+- **场景 4（概念图遍历）**：每个 concept 单独生成一个 `requirement`，顺序调用接口
 
 ### Phase 3: 调用 OpenMAIC API
 
@@ -237,7 +244,7 @@ execute_skill_script(
 ```
 
 - 只有当 `capabilities` 中某项为 `true` 时，才能在生成请求中将对应 feature flag 设为 `true`
-- 如果服务器未返回 `capabilities`（旧版本），不要发送任何可选 feature flags
+- `capabilities` 只用于向用户说明服务端已配置的能力，不转换为请求字段；生成请求始终只发送 `requirement` 和可选的 `materialIds`
 
 **第四步：发送 POST 请求**
 
@@ -253,7 +260,8 @@ execute_skill_script(
     "Authorization": "Bearer <access-code>"
   },
   "body": {
-    "requirement": "..."
+    "requirement": "...",
+    "materialIds": ["mat_..."]
   }
 }
 ```
@@ -322,6 +330,8 @@ Classroom URL:
 
 > URL 必须以纯文本独占一行输出，不加粗、不加代码格式、不加 Markdown 链接。
 
+通用生成结果可在对话展示，但不会被页面解析为已发布课程或完成证据。需要任务追踪时，使用上方「巩固知识」入口。
+
 ## 错误处理
 
 | 错误 | 含义 | 处理方式 |
@@ -365,6 +375,6 @@ Classroom URL:
 - **必须通过 WeKnora MCP 工具调用 OpenMAIC API**——不提供 curl 命令作为降级方案
 - MCP 工具名称格式为 `mcp_{service_name}_{tool_name}`，根据描述识别 HTTP 请求工具
 - 如果 MCP 工具未启用或不可用，告知用户先从 https://github.com/yryuu/mcp-api-requester 下载代码并部署，然后在 WeKnora 中注册该 MCP 服务
-- 单次生成任务预计 2-10 分钟，取决于内容复杂度和可选功能
+- 单次生成任务预计 2-10 分钟，取决于内容复杂度和服务端模型配置
 - 托管模式（open.maic.chat）每天最多 10 次生成配额，独立于 Web UI 配额
 - 如果用户在同一个 job 仍在运行时要求生成新课程，不要重复提交——先检查已有 job 状态

@@ -277,7 +277,11 @@
     .memory-stage { animation: none; }
     .memory-stage::before, .memory-stage::after { display: none; }
     .memory-core { position: relative; padding: 18px 26px; box-shadow: none; }
-    .memory-core h2 { font-size: 24px; line-height: 32px; }
+    .memory-core h2 { font-size: clamp(18px, 4.8vw, 24px); line-height: 32px; white-space: nowrap; }
+    .memory-cards .memory-card { min-height: 0; }
+    .memory-cards .memory-card strong { margin-bottom: 0; line-height: 1.6; text-wrap: balance; }
+    #recall .placeholder { min-height: 0; }
+    #relate .knowledge-layout { min-height: 280px; }
     .memory-card { border: 0; border-left: 1px solid var(--td-component-stroke); border-radius: 0; background: transparent; }
     .memory-card:first-child { border-left: 0; }
     .memory-card:hover { background: rgba(255,255,255,.42); transform: none; }
@@ -353,8 +357,8 @@
   <header class="nav-shell">
     <nav class="nav container" aria-label="主导航">
       <a class="wordmark" href="#top" aria-label="Vidsage 首页">Vidsage<span class="dot">.</span></a>
-      <div class="nav-links" id="nav-links"><a href="#value">产品价值</a><a href="#recall">学员辅导</a><a href="#relate">备课创作</a><a href="#reimagine">教学反馈</a></div>
-      <div class="nav-actions"><button class="login" data-action="login">登录</button><button class="button button-primary" data-action="start">开始体验<svg aria-hidden="true"><use href="#arrow"/></svg></button></div>
+      <div class="nav-links" id="nav-links"><a href="#value">产品价值</a><a href="#recall">帮你答疑</a><a href="#relate">帮你带学</a><a href="#reimagine">帮你备课</a></div>
+      <div class="nav-actions"><button class="button button-primary" data-action="start">开始体验<svg aria-hidden="true"><use href="#arrow"/></svg></button></div>
       <button class="menu-button" aria-label="展开导航" aria-controls="nav-links" aria-expanded="false"><svg aria-hidden="true"><use href="#menu"/></svg></button>
     </nav>
   </header>
@@ -364,17 +368,17 @@
       <div class="container hero-grid">
         <div class="hero-copy">
           <p class="eyebrow">专为网课博主打造</p>
-          <h1 id="hero-title"><span>让你讲过的每一课<br><em class="hero-accent">持续创造价值</em></span></h1>
+          <h1 id="hero-title"><span>让每一门课程<br><em class="hero-accent">持续产生知识复利</em></span></h1>
           <button class="button button-primary" data-action="start">开始体验<svg aria-hidden="true"><use href="#arrow"/></svg></button>
         </div>
-        <div class="hero-visual" id="value" aria-label="三大功能亮点：减少重复答疑、找到下一次创作方向、持续拉新">
+        <div class="hero-visual" id="value" aria-label="三大产品价值">
           <div class="memory-stage">
             <div class="memory-core">
-              <h2>做好的一门课，<br>可以帮你做更多事</h2>
+              <h2>Vidsage，你的 AI 助教</h2>
               <div class="memory-cards">
-                <div class="memory-card"><svg aria-hidden="true"><use href="#chat"/></svg><strong>减少重复答疑</strong><span>AI 根据课程内容回答高频问题，附上对应视频和时间点，让你少花时间反复解释。</span></div>
-                <div class="memory-card"><svg aria-hidden="true"><use href="#idea"/></svg><strong>找到下一次创作方向</strong><span>从学员反复提出的问题中，发现需要补充的讲义、值得重讲的知识点，以及下一门课的选题。</span></div>
-                <div class="memory-card"><svg aria-hidden="true"><use href="#growth"/></svg><strong>持续拉新</strong><span>从已有课程中提取知识卡片、FAQ 和短视频脚本，为日常发布提供素材，让潜在学员看见你的专业能力。</span></div>
+                <div class="memory-card"><svg aria-hidden="true"><use href="#chat"/></svg><strong>减少重复答疑，把时间留给备课</strong></div>
+                <div class="memory-card"><svg aria-hidden="true"><use href="#idea"/></svg><strong>提高服务质量，做好一对一辅导</strong></div>
+                <div class="memory-card"><svg aria-hidden="true"><use href="#growth"/></svg><strong>持续吸引新学员，让专业带来收益</strong></div>
               </div>
             </div>
           </div>
@@ -383,45 +387,45 @@
     </section>
     <section class="feature" id="recall" aria-labelledby="recall-title">
       <div class="container feature-grid">
-        <div class="feature-copy"><p class="eyebrow">学员辅导<span class="feature-number">01 / 03</span></p><h2 id="recall-title">熟悉你的教学，<br>做好学员辅导</h2><p class="body-copy">Vidsage 结合课程内容、你的讲解方式和学员的学习情况，帮你提供更有针对性的课后辅导。</p><ul class="task-list"><li><svg aria-hidden="true"><use href="#arrow"/></svg>制定学习计划</li><li><svg aria-hidden="true"><use href="#arrow"/></svg>通过章节与主题找到所需内容</li><li><svg aria-hidden="true"><use href="#arrow"/></svg>回答问题，定位原视频</li><li><svg aria-hidden="true"><use href="#arrow"/></svg>匹配教学方法，为学员定制练习与巩固课件</li></ul></div>
+        <div class="feature-copy"><p class="eyebrow">课程答疑<span class="feature-number">01 / 03</span></p><h2 id="recall-title">帮你答疑</h2><p class="body-copy">沿用你的教学思路，结合学员的理解程度，把复杂问题讲明白，并定位原课程中的相关讲解，让你少些重复解释。</p></div>
         <div class="feature-visual">
-          <figure class="placeholder" data-screenshot="learner-support" aria-label="学员辅导界面占位：问答与视频出处，以及按学习情况匹配教学方法的设计示意">
-            <div class="window-top"><i></i><i></i><i></i><span>Vidsage / 学员辅导</span><span class="preview-label">截图占位</span></div>
-            <div class="flow-labels"><span>学员提问</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>课程回答</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>视频出处</span></div>
+          <figure class="placeholder" data-screenshot="learner-support" aria-label="课程答疑示意：学员提问、个性化讲解与原视频时间点">
+            <div class="window-top"><i></i><i></i><i></i><span>Vidsage / 课程答疑</span><span class="preview-label">截图占位</span></div>
+            <div class="flow-labels"><span>学员提问</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>个性化讲解</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>视频出处</span></div>
             <div class="answer-layout"><div class="answer-panel"><div class="question-slot"><p class="mock-label">学员的问题</p><div class="ghost-line" aria-hidden="true"></div></div><p class="mock-label">沿用你的讲解方式回答</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div><div class="ghost-line"></div><div class="ghost-line"></div></div></div><div class="source-panel"><p class="mock-label">对应课程视频</p><div class="video-slot"><svg aria-hidden="true"><use href="#image"/></svg></div><div class="source-note"><span>回到相关视频与时间点</span><small>界面示意 · 待替换真实截图</small></div></div></div>
-            <div class="method-panel">
-              <p class="mock-label"><svg aria-hidden="true"><use href="#learn"/></svg>根据学习情况，匹配巩固方式</p>
-              <div class="method-grid">
-                <article class="method-card"><h3>费曼学习法</h3><p>用自己的话讲清概念，再尝试迁移应用。</p></article>
-                <article class="method-card"><h3>最近发展区习题课</h3><p>结合真实答题或作品证据，安排针对性练习。</p></article>
-                <article class="method-card"><h3>工作坊式教学</h3><p>围绕实际任务，边操作边学习。</p></article>
-                <article class="method-card"><h3>螺旋课程</h3><p>分阶段复习，逐步加深理解。</p></article>
-              </div>
-            </div>
           </figure>
-          <div class="stage-tags" aria-label="学员辅导能力"><span>视频定位</span><span>学习计划</span><span>内容总结</span><span>章节导航</span></div>
+          <div class="stage-tags" aria-label="课程答疑能力"><span>教学思路</span><span>理解程度</span><span>视频定位</span></div>
         </div>
       </div>
     </section>
     <section class="feature reversed" id="relate" aria-labelledby="relate-title">
       <div class="container feature-grid">
-        <div class="feature-copy"><p class="eyebrow">备课创作<span class="feature-number">02 / 03</span></p><h2 id="relate-title">提炼课程知识，<br>支持备课创作</h2><p class="body-copy">Vidsage 将课程中的概念、实体、案例、方法论和洞察整理成 Wiki 与知识图谱，帮你看清知识之间的联系，发现课程体系中需要补充的内容。</p><p class="body-copy">将已有知识用于复习资料与内容初稿，减少备课创作时间。</p></div>
+        <div class="feature-copy"><p class="eyebrow">学习指导<span class="feature-number">02 / 03</span></p><h2 id="relate-title">帮你带学</h2><p class="body-copy">提炼课程知识，形成学习地图，串联知识点，理清关系。再结合你的教学风格与学员特性，定制学习路线，动态调整学习节奏，让学员获得一对一的学习指导，提高你的辅导质量。</p></div>
         <div class="feature-visual">
-          <figure class="placeholder" data-screenshot="knowledge-reuse" aria-label="知识图谱与内容复用截图占位示意">
-            <div class="window-top"><i></i><i></i><i></i><span>Vidsage / 课程知识</span><span class="preview-label">截图占位</span></div>
-            <div class="knowledge-layout"><div class="graph-area"><svg class="knowledge-graph" viewBox="0 0 340 240" role="img" aria-label="五类课程知识与待补充内容的关系示意"><line x1="170" y1="105" x2="64" y2="38"/><line x1="170" y1="105" x2="272" y2="38"/><line x1="170" y1="105" x2="62" y2="154"/><line x1="170" y1="105" x2="276" y2="154"/><line x1="170" y1="105" x2="170" y2="213"/><line x1="272" y1="38" x2="276" y2="154"/><rect class="central" x="131" y="85" width="78" height="40" rx="9"/><rect x="29" y="20" width="70" height="36" rx="9"/><rect x="237" y="20" width="70" height="36" rx="9"/><rect x="27" y="136" width="70" height="36" rx="9"/><rect x="237" y="136" width="78" height="36" rx="9"/><rect class="gap-node" x="124" y="195" width="92" height="36" rx="9"/><text x="170" y="110" text-anchor="middle">概念</text><text x="64" y="43" text-anchor="middle">实体</text><text x="272" y="43" text-anchor="middle">案例</text><text x="62" y="159" text-anchor="middle">洞察</text><text x="276" y="159" text-anchor="middle">方法论</text><text x="170" y="218" text-anchor="middle">待补充内容</text></svg><p class="graph-note">关系示意 · 待替换真实截图</p></div><div class="reuse-panel"><p class="mock-label">复用为新的内容</p><div class="document-slot"><p class="mock-label"><svg aria-hidden="true"><use href="#book"/></svg>复习资料</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div></div><div class="document-slot"><p class="mock-label"><svg aria-hidden="true"><use href="#idea"/></svg>内容初稿</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div></div></div></div>
+          <figure class="placeholder" data-screenshot="knowledge-reuse" aria-label="学习地图、个人学习路线与四种教学方法示意">
+            <div class="window-top"><i></i><i></i><i></i><span>Vidsage / 学习地图</span><span class="preview-label">截图占位</span></div>
+            <div class="knowledge-layout"><div class="graph-area"><svg class="knowledge-graph" viewBox="0 0 340 240" role="img" aria-label="五类课程知识之间的关系与学习重点示意"><line x1="170" y1="105" x2="64" y2="38"/><line x1="170" y1="105" x2="272" y2="38"/><line x1="170" y1="105" x2="62" y2="154"/><line x1="170" y1="105" x2="276" y2="154"/><line x1="170" y1="105" x2="170" y2="213"/><line x1="272" y1="38" x2="276" y2="154"/><rect class="central" x="131" y="85" width="78" height="40" rx="9"/><rect x="29" y="20" width="70" height="36" rx="9"/><rect x="237" y="20" width="70" height="36" rx="9"/><rect x="27" y="136" width="70" height="36" rx="9"/><rect x="237" y="136" width="78" height="36" rx="9"/><rect class="gap-node" x="124" y="195" width="92" height="36" rx="9"/><text x="170" y="110" text-anchor="middle">概念</text><text x="64" y="43" text-anchor="middle">实体</text><text x="272" y="43" text-anchor="middle">案例</text><text x="62" y="159" text-anchor="middle">洞察</text><text x="276" y="159" text-anchor="middle">方法论</text><text x="170" y="218" text-anchor="middle">学习重点</text></svg><p class="graph-note">关系示意 · 待替换真实截图</p></div><div class="reuse-panel"><p class="mock-label">个人学习路线</p><div class="document-slot"><p class="mock-label"><svg aria-hidden="true"><use href="#book"/></svg>理解核心概念</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div></div><div class="document-slot"><p class="mock-label"><svg aria-hidden="true"><use href="#idea"/></svg>实践与巩固</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div></div></div></div>
+            <div class="method-panel">
+              <p class="mock-label"><svg aria-hidden="true"><use href="#learn"/></svg>根据学习情况，匹配教学方法</p>
+              <div class="method-grid">
+                <article class="method-card"><h3>支架式教学</h3><p>拆解学习步骤，提供提示，逐步引导学员独立完成。</p></article>
+                <article class="method-card"><h3>实操工作坊</h3><p>围绕真实任务，边操作边学习，在实践中获得反馈。</p></article>
+                <article class="method-card"><h3>螺旋式课程</h3><p>分阶段回顾核心知识，在新的任务中逐步加深理解。</p></article>
+                <article class="method-card"><h3>费曼学习法</h3><p>用自己的话讲清概念，发现理解缺口，再针对性巩固。</p></article>
+              </div>
+            </div>
           </figure>
         </div>
       </div>
     </section>
     <section class="feature" id="reimagine" aria-labelledby="reimagine-title">
       <div class="container feature-grid">
-        <div class="feature-copy"><p class="eyebrow">教学反馈<span class="feature-number">03 / 03</span></p><h2 id="reimagine-title">汇总学员提问，<br>找准教学重点</h2><p class="body-copy">Vidsage 自动汇总分析学员提问、归纳高频问题，并关联对应课程，帮你发现：</p><ul class="task-list"><li><svg aria-hidden="true"><use href="#arrow"/></svg>需要重讲的知识点</li><li><svg aria-hidden="true"><use href="#arrow"/></svg>值得补充的资料</li><li><svg aria-hidden="true"><use href="#arrow"/></svg>新的学习需求</li></ul></div>
+        <div class="feature-copy"><p class="eyebrow">教学备课<span class="feature-number">03 / 03</span></p><h2 id="reimagine-title">帮你备课</h2><p class="body-copy">从学员提问与练习表现中发现教学缺口和新方向，结合你的教学方法与课程重点，定制讲义、复习材料和练习，让学员练准薄弱点。</p></div>
         <div class="feature-visual">
-          <figure class="placeholder" data-screenshot="teaching-feedback" aria-label="学员提问自动归纳与课程关联截图占位示意">
-            <div class="window-top"><i></i><i></i><i></i><span>Vidsage / 教学反馈</span><span class="preview-label">截图占位</span></div>
-            <div class="flow-labels"><span>分散提问</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>AI 自动归纳</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>关联课程</span></div>
-            <div class="feedback-layout"><div class="question-stream"><p class="mock-label">学员提问</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div></div><div class="insight-panel"><p class="mock-label">AI 自动整理</p><div class="insight-row"><p class="mock-label">高频问题</p><div class="ghost-line" aria-hidden="true"></div></div><div class="insight-row"><p class="mock-label">需要重讲的知识点</p><div class="ghost-line" aria-hidden="true"></div></div><div class="insight-row"><p class="mock-label">新的学习需求</p><div class="ghost-line" aria-hidden="true"></div></div><p class="asset-note">界面示意 · 待替换真实截图</p></div></div>
+          <figure class="placeholder" data-screenshot="teaching-feedback" aria-label="根据学员提问与练习表现发现教学缺口，定制备课材料示意">
+            <div class="window-top"><i></i><i></i><i></i><span>Vidsage / 教学备课</span><span class="preview-label">截图占位</span></div>
+            <div class="flow-labels"><span>提问与练习表现</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>发现教学缺口</span><svg aria-hidden="true"><use href="#arrow"/></svg><span>定制备课材料</span></div>
+            <div class="feedback-layout"><div class="question-stream"><p class="mock-label">学员提问与练习表现</p><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div><div class="skeleton-lines" aria-hidden="true"><div class="ghost-line"></div><div class="ghost-line"></div></div></div><div class="insight-panel"><p class="mock-label">针对薄弱点，准备教学材料</p><div class="insight-row"><p class="mock-label">补充讲义</p><div class="ghost-line" aria-hidden="true"></div></div><div class="insight-row"><p class="mock-label">复习材料</p><div class="ghost-line" aria-hidden="true"></div></div><div class="insight-row"><p class="mock-label">针对性练习</p><div class="ghost-line" aria-hidden="true"></div></div><p class="asset-note">界面示意 · 待替换真实截图</p></div></div>
           </figure>
         </div>
       </div>
@@ -475,4 +479,3 @@
   </script>
 </body>
 </html>
-

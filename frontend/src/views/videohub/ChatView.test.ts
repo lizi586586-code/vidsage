@@ -50,7 +50,7 @@ test('chat page keeps the follow-up composer inside the conversation width', () 
   assert.match(componentSource, /\.conversation-composer\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0/s)
   assert.match(componentSource, /\.conversation-composer textarea\s*\{[^}]*overflow-wrap:\s*anywhere/s)
   assert.match(componentSource, /\.conversation__messages\s*\{[^}]*padding:\s*16px 0 24px/s)
-  assert.match(componentSource, /\.conversation-composer\s*\{[^}]*padding:\s*10px 0 10px 12px/s)
+  assert.match(componentSource, /\.conversation-composer\s*\{[^}]*padding:\s*10px 12px/s)
 })
 
 test('chat page uses text-only edit actions without hover blocks', () => {
@@ -109,6 +109,11 @@ test('both chat composers hide attachments and place the custom microphone befor
   }
 })
 
+test('chat inputs use the product default question placeholder and keep actions away from the border', () => {
+  assert.equal((componentSource.match(/placeholder="请输入你的问题"/g) || []).length, 2)
+  assert.match(componentSource, /\.conversation-composer\s*\{[^}]*padding:\s*10px 12px/s)
+})
+
 test('chat page clears the recovery pointer after a routed session is loaded', () => {
   assert.match(componentSource, /if \(sessionQueryId\.value\) \{[\s\S]*?openSessionFromRoute\(sessionQueryId\.value\)[\s\S]*?clearChatRecovery\(recoveryStorage, CHAT_PAGE_RECOVERY_KEY\)/)
   assert.match(componentSource, /pending\?\.sessionId === sessionQueryId\.value/)
@@ -121,4 +126,11 @@ test('chat page puts the pending question back when session recovery fails', () 
 test('chat page supplements a routed session when history still misses the pending question', () => {
   assert.match(componentSource, /pending\?\.sessionId === sessionQueryId\.value && activeSession\.value\?\.id === sessionQueryId\.value/)
   assert.match(componentSource, /const recovered = appendRecoveredQuestion\(activeSession\.value, pending\.question\)/)
+})
+
+test('chat detail uses the compact video-detail review pill', () => {
+  assert.match(componentSource, /\.review-entry--conversation\s*\{[^}]*min-height:\s*28px[^}]*border-radius:\s*var\(--td-radius-round\)/s)
+  assert.doesNotMatch(componentSource.split('<section v-else class="conversation">')[1].split('</section>')[0], /ReviewLearningIcon|review-entry__icon/)
+  assert.match(componentSource, /<strong>巩固知识<\/strong>/)
+  assert.match(componentSource, /\.review-entry--conversation:hover:not\(:disabled\)[^}]*border-color:\s*var\(--td-brand-color\)[^}]*box-shadow:\s*none/s)
 })

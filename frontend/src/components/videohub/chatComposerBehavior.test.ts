@@ -41,6 +41,7 @@ for (const scenario of cases) {
         assistantRecoveryKey: () => 'test', shouldAutoRoute: () => true,
         materializeActiveSession: () => {}, materializePendingSession: () => {},
         updateStreamingMessage: () => {}, cacheSession: () => {}, welcome: () => ({}),
+        route: { name: 'aiChat' },
         router: { replace: async () => {} }, window: { dispatchEvent: () => {} },
         MessagePlugin: { error: () => {} },
         CustomEvent: class {},

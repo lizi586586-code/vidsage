@@ -18,7 +18,7 @@
       <div class="chat-landing__inner">
         <h1>Learn with Vidsage</h1>
         <form class="chat-composer" @submit.prevent="startSession">
-          <textarea v-model="question" rows="4" placeholder="问问你的视频知识库，例如：帮我总结最近看过的 AI 提示词视频" @keydown.enter.exact.prevent="startSession" />
+          <textarea v-model="question" rows="4" placeholder="请输入你的问题" @keydown.enter.exact.prevent="startSession" />
           <footer>
             <div class="chat-composer__tools">
               <VideohubAgentPicker appearance="tool" />
@@ -100,9 +100,12 @@
         <ReviewCourseChooser v-if="choosingCourse" v-model="selectedCourseId" :courses="courses" :recent-course-ids="recentCourseIds" :loading="loadingCourses"
           :error="courseError" :busy="preparingClassroom" @confirm="confirmCourse" @cancel="cancelCourse" @retry="loadCourses" />
       </div>
+      <button class="review-entry review-entry--conversation" type="button" :disabled="isGenerating || preparingClassroom" @click="openReviewCourse()">
+        <span class="review-entry__copy"><strong>巩固知识</strong></span>
+      </button>
       <form class="conversation-composer" @submit.prevent="continueSession">
         <div class="conversation-composer__body">
-          <textarea v-model="followUp" rows="2" placeholder="继续追问" @keydown.enter.exact.prevent="continueSession" />
+          <textarea v-model="followUp" rows="2" placeholder="请输入你的问题" @keydown.enter.exact.prevent="continueSession" />
           <div class="conversation-composer__tools">
             <VideohubAgentPicker appearance="tool" />
           </div>
@@ -125,10 +128,6 @@
           </t-button>
         </div>
       </form>
-      <button class="review-entry review-entry--conversation" type="button" :disabled="isGenerating || preparingClassroom" @click="openReviewCourse">
-        <ReviewLearningIcon class="review-entry__icon" />
-        <span class="review-entry__copy"><strong>巩固学习</strong><small>根据学习特性，生成专属复习内容</small></span>
-      </button>
     </section>
   </main>
 </template>
@@ -157,6 +156,8 @@ import {
   readChatRecovery,
   writeChatRecovery,
 } from '@/api/videohub/chatRecovery'
+
+defineOptions({ name: 'ChatView' })
 
 const router = useRouter()
 const route = useRoute()
@@ -202,7 +203,7 @@ const { choosingCourse, loadingCourses, courseError, courses, selectedCourseId, 
   classroomResult, classroomVideo, recentCourseIds, askCourse, loadCourses, cancelCourse, confirmCourse, updateStatus } = useReviewCourse({
   userId: computed(() => authStore.user?.id || ''),
   storageKey: computed(() => `openmaic:${authStore.user?.id || ''}:chat`),
-  contextKey: sessionQueryId,
+  contextKey: computed(() => activeSession.value?.id || ''),
   busy: isGenerating,
   onStart: async instruction => {
     if (activeSession.value) { followUp.value = instruction; await continueSession() }
@@ -329,7 +330,10 @@ function materializePendingSession(pendingSession: ChatSession, createdSession: 
     title: createdSession.title,
     updatedAt: Date.now(),
   })
-  void router.replace({ path: '/platform/ai-chat', query: { session: createdSession.id } })
+  window.dispatchEvent(new CustomEvent('weknora:session-refresh'))
+  if (route.name === 'aiChat') {
+    void router.replace({ path: '/platform/ai-chat', query: { session: createdSession.id } })
+  }
   return materialized
 }
 function persistPendingQuestion(questionText: string, session?: ChatSession) {
@@ -381,7 +385,9 @@ async function startSession() {
     activeSession.value = created
     clearChatRecovery(recoveryStorage, CHAT_PAGE_RECOVERY_KEY)
     window.dispatchEvent(new CustomEvent('weknora:session-refresh'))
-    await router.replace({ path: '/platform/ai-chat', query: { session: created.id } })
+    if (route.name === 'aiChat') {
+      await router.replace({ path: '/platform/ai-chat', query: { session: created.id } })
+    }
   } catch (error) {
     if (revision !== turnRevision) return
     session.messages.push({ id: `error-${Date.now()}`, sender: 'assistant', text: error instanceof Error ? error.message : '问答生成失败，请稍后重试', timestamp: '刚刚' })
@@ -497,7 +503,15 @@ function navigateToEvidence(videoId: string, seconds: number) {
   if (!videoId || !Number.isFinite(seconds) || seconds < 0) return
   router.push(`/platform/videos/${videoId}?t=${Math.floor(seconds)}`)
 }
-watch(sessionQueryId, async (sessionId) => {
+watch([() => route.name, sessionQueryId], async ([routeName, sessionId], [previousRouteName]) => {
+  // Cached pages still observe route changes; only a chat selection can end a turn.
+  if (routeName !== 'aiChat') return
+  if (previousRouteName !== 'aiChat' && !sessionId && activeSession.value) {
+    if (!activeSession.value.id.startsWith('pending-')) {
+      await router.replace({ path: '/platform/ai-chat', query: { session: activeSession.value.id } })
+    }
+    return
+  }
   if (sessionId !== activeSession.value?.id) leaveCurrentTurn()
   if (!sessionListReady.value) return
   if (!sessionId) {
@@ -659,11 +673,11 @@ onMounted(async () => {
 .review-entry__copy { display: flex; flex-direction: column; gap: 3px; }
 .review-entry__copy strong { font-size: 16px; font-weight: 500; line-height: 24px; }
 .review-entry__copy small { font-size: 12px; font-weight: 400; line-height: 20px; color: var(--td-text-color-secondary); white-space: nowrap; }
-.review-entry--conversation { width: fit-content; min-width: 176px; min-height: 52px; margin-top: 10px; padding: 10px 16px; border-radius: var(--td-radius-large); gap: 10px; }
-.review-entry--conversation .review-entry__icon { width: 26px; height: 26px; }
+.review-entry--conversation { width: fit-content; min-width: 0; min-height: 28px; margin: 0 0 12px; padding: 3px 10px; border-color: var(--td-component-stroke); border-radius: var(--td-radius-round); background: var(--td-bg-color-container); backdrop-filter: none; }
 .review-entry--conversation .review-entry__copy { gap: 0; }
 .review-entry--conversation .review-entry__copy strong { font: var(--td-font-body-medium); }
 .review-entry--conversation .review-entry__copy small { display: none; }
+.review-entry--conversation:hover:not(:disabled), .review-entry--conversation:focus-visible { border-color: var(--td-brand-color); background: var(--td-bg-color-container); box-shadow: none; color: var(--td-brand-color); }
 .review-entry:disabled { cursor: not-allowed; opacity: .5; }
 
 
@@ -741,7 +755,7 @@ onMounted(async () => {
 
 .conversation {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   box-sizing: border-box;
   height: calc(100% - 4px);
   min-height: 0;
@@ -757,6 +771,8 @@ onMounted(async () => {
   padding-bottom: 10px;
   border-bottom: 1px solid rgba(0,0,0,.08);
 }
+
+.conversation--loading { grid-template-rows: auto minmax(0, 1fr) auto; }
 
 .conversation > header div {
   min-width: 0;
@@ -833,7 +849,7 @@ onMounted(async () => {
   min-width: 0;
   gap: 10px;
   align-items: end;
-  padding: 10px 0 10px 12px;
+  padding: 10px 12px;
   border: 1px solid rgba(255,255,255,.84);
   border-radius: var(--td-radius-extraLarge);
   background: rgba(255,255,255,.62);
@@ -949,7 +965,7 @@ onMounted(async () => {
   .conversation-composer {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;
-    padding: 8px 10px;
+    padding: 12px;
   }
   .conversation-composer .chat-actions {
     justify-content: flex-end;

@@ -11,9 +11,14 @@
           <span>专属 AI 智能交互课堂</span>
         </div>
       </div>
-      <t-button theme="default" variant="outline" class="invite-header__button" @click="openLogin">
-        直接进入空间
-      </t-button>
+      <div class="invite-header__actions">
+        <t-button theme="default" variant="outline" class="invite-header__button" @click="openLogin">
+          加入学习空间
+        </t-button>
+        <t-button theme="primary" variant="text" tag="a" href="http://127.0.0.1/" class="invite-header__about">
+          了解Vidsage
+        </t-button>
+      </div>
     </header>
 
     <section v-if="loading" class="invite-state" aria-live="polite">
@@ -153,6 +158,7 @@ watch(token, async (currentToken) => {
 
 .invite-header, .invite-hero, .invite-features, .invite-footer { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; }
 .invite-header { display: flex; align-items: center; justify-content: space-between; padding: 28px 0; }
+.invite-header__actions { display: flex; align-items: center; gap: 8px; }
 .invite-brand { display: flex; align-items: center; gap: 12px; }
 .invite-brand__mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: var(--td-radius-medium); color: var(--td-text-color-anti); background: var(--td-brand-color); }
 .invite-brand strong, .invite-brand span { display: block; }
@@ -184,5 +190,5 @@ watch(token, async (currentToken) => {
 .invite-state h1 { margin: 0; color: var(--td-text-color-primary); font-size: 26px; }
 .invite-state p { margin: 0; }
 .invite-state--error > .t-icon { color: var(--td-error-color); font-size: 30px; }
-@media (max-width: 720px) { .invite-landing { padding: 0 20px; } .invite-header__button { display: none; } .invite-hero { padding: 54px 0 64px; } .invite-features { grid-template-columns: 1fr; padding-bottom: 48px; } .invite-features .invite-card:last-child { grid-column: auto; } .invite-preview { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .invite-landing { padding: 0 20px; } .invite-header__actions { display: none; } .invite-hero { padding: 54px 0 64px; } .invite-features { grid-template-columns: 1fr; padding-bottom: 48px; } .invite-features .invite-card:last-child { grid-column: auto; } .invite-preview { grid-template-columns: 1fr; } }
 </style>

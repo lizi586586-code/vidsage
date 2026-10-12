@@ -2,7 +2,11 @@
     <div class="main" :class="{ 'main--video-home': route.name === 'videoList' || route.name === 'videoDetail' || route.name === 'knowledgeGraph' }" ref="dropzone">
         <Menu></Menu>
         <div v-if="isRouterAlive" class="platform-route-outlet">
-            <RouterView />
+            <RouterView v-slot="{ Component }">
+                <KeepAlive include="ChatView">
+                    <component :is="Component" />
+                </KeepAlive>
+            </RouterView>
         </div>
         <div class="upload-mask" v-show="ismask">
             <UploadMask></UploadMask>

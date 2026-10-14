@@ -1,11 +1,53 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestDownloadGzipExtension(t *testing.T) {
+	var compressed bytes.Buffer
+	w := gzip.NewWriter(&compressed)
+	w.Write([]byte("extension bytes"))
+	w.Close()
+	for _, tc := range []struct {
+		name      string
+		status    int
+		body      []byte
+		wantError bool
+	}{
+		{"complete", 200, compressed.Bytes(), false},
+		{"upstream error", 502, compressed.Bytes(), true},
+		{"truncated", 200, compressed.Bytes()[:compressed.Len()-4], true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				w.Write(tc.body)
+			}))
+			defer server.Close()
+			path := filepath.Join(t.TempDir(), "extension")
+			err := downloadGzipExtension(context.Background(), server.URL, path)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("error = %v, wantError = %v", err, tc.wantError)
+			}
+			if !tc.wantError {
+				got, err := os.ReadFile(path)
+				if err != nil || string(got) != "extension bytes" {
+					t.Fatalf("downloaded bytes = %q, error = %v", got, err)
+				}
+			}
+		})
+	}
+}
 
 func TestRetryWithBackoffRetriesTransientFailure(t *testing.T) {
 	attempts := 0

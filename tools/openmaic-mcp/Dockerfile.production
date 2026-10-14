@@ -1,0 +1,19 @@
+# Run npm ci, npm test and npm prune --omit=dev before packaging.
+# Dependencies are pure JavaScript; no host-native binaries are copied.
+# A verified production runtime may be supplied for an offline release.
+ARG RUNTIME_IMAGE=node:22-alpine
+FROM ${RUNTIME_IMAGE}
+USER root
+WORKDIR /opt/openmaic-mcp
+ENV NODE_ENV=production OPENMAIC_JOB_JOURNAL=/app/data/openmaic-jobs.json PORT=3000
+COPY --chown=1000:1000 tools/openmaic-mcp/package*.json ./
+COPY --chown=1000:1000 tools/openmaic-mcp/node_modules ./node_modules
+COPY --chown=1000:1000 tools/openmaic-mcp/dist ./dist
+COPY --chown=1000:1000 tools/openmaic-mcp/scripts ./scripts
+RUN mkdir -p /app/data && chown 1000:1000 /app/data && chmod 700 /app/data
+USER 1000:1000
+ENTRYPOINT []
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:3000/healthz || exit 1
+CMD ["node", "dist/index.js"]

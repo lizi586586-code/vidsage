@@ -1,13 +1,76 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 )
+
+// Bootstrap HTTPS using Go's TLS client: DuckDB needs httpfs before it can
+// fetch other extensions over HTTPS. INSTALL still checks the extension signature.
+func bootstrapHTTPFS(ctx context.Context, sqlDB *sql.DB) error {
+	var version, platform string
+	if err := sqlDB.QueryRowContext(ctx, "SELECT version()").Scan(&version); err != nil {
+		return err
+	}
+	if err := sqlDB.QueryRowContext(ctx, "PRAGMA platform").Scan(&platform); err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "duckdb-httpfs-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "httpfs.duckdb_extension")
+	url := fmt.Sprintf("https://extensions.duckdb.org/%s/%s/httpfs.duckdb_extension.gz", version, platform)
+	if err := retryWithBackoff(ctx, duckdbExtensionInstallAttempts, duckdbExtensionRetryDelay, func() error {
+		attemptCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		return downloadGzipExtension(attemptCtx, url, path)
+	}); err != nil {
+		return fmt.Errorf("bootstrap httpfs: %w", err)
+	}
+	_, err = sqlDB.ExecContext(ctx, fmt.Sprintf("INSTALL '%s'; LOAD httpfs;", path))
+	return err
+}
+
+func downloadGzipExtension(ctx context.Context, url, path string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("extension download HTTP %d", resp.StatusCode)
+	}
+	zr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(f, zr)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
 
 // duckdbExtensions is the list of DuckDB extensions required by WeKnora's
 // data analysis tool. `spatial` is used for layer metadata (st_read_meta)
@@ -87,6 +150,9 @@ func downloadExtensions() {
 		panic(err)
 	}
 	defer sqlDB.Close()
+	if err := bootstrapHTTPFS(ctx, sqlDB); err != nil {
+		panic(err)
+	}
 	// The default HTTP endpoint is rejected by some release build networks.
 	if _, err := sqlDB.ExecContext(ctx, "SET custom_extension_repository = 'https://extensions.duckdb.org'"); err != nil {
 		panic(err)

@@ -73,11 +73,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     fi
 
 # Build the application with version info
+ARG GO_BUILD_PARALLELISM=2
 RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
     if [ "$WITH_ANYDOC" = "1" ]; then \
-        make build-prod GO_BUILD_TAGS=anydoc; \
+        GOMAXPROCS=${GO_BUILD_PARALLELISM} GOFLAGS="-p=${GO_BUILD_PARALLELISM}" make build-prod GO_BUILD_TAGS=anydoc; \
     else \
-        make build-prod; \
+        GOMAXPROCS=${GO_BUILD_PARALLELISM} GOFLAGS="-p=${GO_BUILD_PARALLELISM}" make build-prod; \
     fi
 RUN --mount=type=cache,target=/go/pkg/mod cp -r /go/pkg/mod/github.com/yanyiwu/ /app/yanyiwu/
 

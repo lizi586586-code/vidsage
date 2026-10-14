@@ -87,6 +87,10 @@ func downloadExtensions() {
 		panic(err)
 	}
 	defer sqlDB.Close()
+	// The default HTTP endpoint is rejected by some release build networks.
+	if _, err := sqlDB.ExecContext(ctx, "SET custom_extension_repository = 'https://extensions.duckdb.org'"); err != nil {
+		panic(err)
+	}
 
 	for _, ext := range duckdbExtensions {
 		if err := installDuckDBExtension(ctx, sqlDB, ext); err != nil {

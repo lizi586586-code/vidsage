@@ -34,7 +34,7 @@ test('each AI content module exposes an in-place generation retry', () => {
 test('module retries preserve existing content instead of replacing it with a skeleton', () => {
   assert.match(summary, /sections\.value\.length === 0/)
   assert.match(chapters, /chapters\.value\.length === 0/)
-  assert.match(related, /!hasContent\.value/)
+  assert.match(related, /!context\.value\.center/)
   assert.match(detail, /\[module\]: \{ \.\.\.current, status: 'loading' \}/)
   assert.doesNotMatch(detail, /catch \{[\s\S]*?reloadContentModule\(module\)[\s\S]*?\} finally/)
 })
@@ -42,7 +42,7 @@ test('module retries preserve existing content instead of replacing it with a sk
 test('active generation keeps empty modules in skeleton state even after a content request error', () => {
   assert.match(summary, /sections\.value\.length === 0 && \(loading\.value \|\| props\.isGenerating\)/)
   assert.match(chapters, /chapters\.value\.length === 0 && \(loading\.value \|\| props\.isGenerating\)/)
-  assert.match(related, /!hasContent\.value && \(loading\.value \|\| props\.isGenerating\)/)
+  assert.match(related, /!context\.value\.center && \(props\.contentState\.status === 'loading' \|\| props\.isGenerating\)/)
 })
 
 test('related knowledge retries the graph generation job', () => {

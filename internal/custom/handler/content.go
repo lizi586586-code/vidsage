@@ -41,6 +41,7 @@ type ContentHandler struct {
 	Wiki  *weknora.WikiClient
 	KBID  string
 	Graph knowledgegraph.Store
+	LLM   RelatedWikiLLM
 }
 
 var wikiTimestampPattern = regexp.MustCompile(`\b(\d{1,3}:\d{2}(?::\d{2})?)\b`)
@@ -656,7 +657,26 @@ func (h *ContentHandler) NativeWikiGraph(c *gin.Context) {
 		contentError(c, http.StatusBadGateway, video.ID, "summary", "weknora_read_failed", "read native wiki graph: "+err.Error(), video.UpdatedAt)
 		return
 	}
-	c.JSON(http.StatusOK, graph)
+	c.JSON(http.StatusOK, gin.H{"nodes": graph.Nodes, "edges": graph.Edges, "meta": graph.Meta})
+}
+
+// NativeWikiRelations generates and caches explanatory copy separately from
+// the native graph so graph discovery is never blocked by model latency.
+func (h *ContentHandler) NativeWikiRelations(c *gin.Context) {
+	video, ok := h.loadVideo(c)
+	if !ok {
+		return
+	}
+	page, ok := h.nativeWikiGraphCenter(c, video)
+	if !ok {
+		return
+	}
+	graph, err := h.Wiki.GetEgoGraph(c.Request.Context(), h.KBID, page.Slug)
+	if err != nil {
+		contentError(c, http.StatusBadGateway, video.ID, "summary", "weknora_read_failed", "read native wiki graph: "+err.Error(), video.UpdatedAt)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"relations": h.nativeWikiRelations(c.Request.Context(), video.ID, page, graph)})
 }
 
 // RelatedKnowledgeResp 关联知识聚合响应（CP-T008）

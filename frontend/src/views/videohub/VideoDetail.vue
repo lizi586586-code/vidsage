@@ -29,7 +29,7 @@
             <VideoPlayer ref="player" :src="video.play_url || video.video_url" :poster="video.cover_url || video.poster_url" :title="video.title" :chapter-label="currentChapterLabel" :duration-hint="video.durationSeconds" :subtitles="video.subtitles" @timeupdate="currentSeconds = $event" @play="recordRecentlyPlayedCourse(authStore.user?.id || '', video.id)" />
             <ChapterNavigation :video="video" :current-seconds="currentSeconds" :content-state="content.outline" :is-generating="outlineGenerating" :is-processing-failed="outlineFailed" :is-retrying="retryingStage === 'outline'" @reload="reloadOutline" @retry="retryContentModule('outline')" @seek="seekTo" />
           </section>
-          <aside ref="right" class="video-detail-page__right">
+          <aside ref="right" class="video-detail-page__right" :class="{ 'video-detail-page__right--related': activeTab === 'related' }">
             <t-tabs v-model="activeTab">
               <t-tab-panel value="summary">
                 <template #label><span class="video-detail-page__tab-label"><span>智能总结</span></span></template>
@@ -340,6 +340,8 @@ onBeforeUnmount(() => {
 .video-detail-page__tab-label { display: inline-flex; align-items: center; gap: 0; font-size: 16px; }
 .video-detail-page__right :deep(.t-tabs__operations) { display: none; }
 .video-detail-page__right :deep(.t-tabs__content) { min-height: 0; flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; background: transparent; }
+.video-detail-page__right--related :deep(.t-tabs__content) { scrollbar-width: none; -ms-overflow-style: none; }
+.video-detail-page__right--related :deep(.t-tabs__content::-webkit-scrollbar) { display: none; width: 0; height: 0; }
 .video-detail-page__state { min-height: 420px; display: grid; place-items: center; }
 .video-detail-page__error { max-width: 640px; margin: 0 auto 24px; }
 .video-detail-page :deep(.t-button:hover), .video-detail-page :deep(.t-button:active), .video-detail-page :deep(.t-button:focus) { background: transparent !important; background-color: transparent !important; box-shadow: none !important; --ripple-color: transparent; }

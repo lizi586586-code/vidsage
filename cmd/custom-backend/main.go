@@ -291,6 +291,7 @@ func main() {
 		EvidenceWeKnora: evidenceWeKnoraCli, KnowledgeWeKnora: knowledgeWeKnoraCli, Graph: wikiGraph,
 		TrainingOrchestration: trainingService,
 		MeetingOrchestration:  meetingService,
+		RelatedWikiLLM:        llmCli,
 	}
 	router := handler.BuildRouterForDeps(routerDeps)
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -340,6 +341,7 @@ func autoMigrateLocalDB(db *gorm.DB) error {
 		&model.Video{},
 		&model.VideoTranscriptChunk{},
 		&model.VideoTranscriptSource{},
+		&model.VideoWikiRelation{},
 		&model.VideoProcessingJob{},
 		&model.VideoSummaryFramework{},
 		&model.DashboardQuestionStat{},

@@ -1,16 +1,23 @@
 <template>
   <div class="assistant-shell">
-    <div class="assistant-frame" :class="{ 'assistant-frame--expanded': expanded }">
+    <div ref="assistantFrame" class="assistant-frame" :class="{ 'assistant-frame--expanded': expanded }">
       <section v-if="expanded" class="assistant-drawer">
         <header>
           <div>
             <span v-if="firstQuestion">{{ firstQuestion }}</span>
           </div>
-          <t-button variant="text" shape="square" aria-label="收起" @click="expanded = false">
+          <t-button class="assistant-collapse" variant="text" shape="square" aria-label="收起" @pointerdown.prevent.stop="collapseAssistant" @click="collapseAssistant">
             <t-icon name="chevron-down" />
           </t-button>
         </header>
         <div ref="messageArea" class="assistant-messages">
+          <div v-if="reviewFallbackInsertIndex === 0" class="assistant-review-reply">
+            <AssistantReplyShell>
+            <ReviewMaterialReply
+              :request-id="classroomResult?.request_id || ''" :user-id="authStore.user?.id || ''" :initial-task="classroomResult"
+              :video="classroomVideo || (!globalMode ? currentVideo : null)" @status="updateStatus" />
+            </AssistantReplyShell>
+          </div>
           <template v-for="(message, messageIndex) in messages" :key="message.id">
           <div v-if="!isReinforcementReply(message, messageIndex)" :class="['assistant-message', `assistant-message--${message.sender}`, { 'assistant-message--welcome': message.id.startsWith('welcome-') }]">
             <component :is="message.sender === 'assistant' ? AssistantReplyShell : 'div'" :timestamp="message.sender === 'assistant' ? formatChatMessageTime(message.timestamp) : undefined" class="assistant-message__body">
@@ -57,50 +64,56 @@
               :initial-task="classroomResult" :video="classroomResult?.request_id === reviewRequestId(message.text) ? classroomVideo || (!globalMode ? currentVideo : null) : !globalMode ? currentVideo : null" @status="updateStatus" />
             </AssistantReplyShell>
           </div>
-          </template>
-          <div v-if="classroomResult && !messages.some(message => reviewRequestId(message.text) === classroomResult?.request_id)" class="assistant-review-reply">
+          <div v-if="reviewFallbackInsertIndex === messageIndex + 1" class="assistant-review-reply">
             <AssistantReplyShell>
-          <ReviewMaterialReply
-            :request-id="classroomResult.request_id" :user-id="authStore.user?.id || ''" :initial-task="classroomResult"
-            :video="classroomVideo || (!globalMode ? currentVideo : null)" @status="updateStatus" />
+            <ReviewMaterialReply
+              :request-id="classroomResult?.request_id || ''" :user-id="authStore.user?.id || ''" :initial-task="classroomResult"
+              :video="classroomVideo || (!globalMode ? currentVideo : null)" @status="updateStatus" />
             </AssistantReplyShell>
           </div>
+          </template>
           <ReviewCourseChooser v-if="choosingCourse" v-model="selectedCourseId" :courses="courses" :recent-course-ids="recentCourseIds" :loading="loadingCourses"
             :error="courseError" :busy="preparingClassroom" @confirm="confirmCourse" @cancel="cancelCourse" @retry="loadCourses" />
         </div>
       </section>
-      <ReviewSuggestions class="assistant-suggestions" :items="suggestions" :disabled="isGenerating || preparingClassroom" @select="selectSuggestion" />
-      <form class="assistant-composer" @submit.prevent="send(input)">
-        <div class="assistant-composer__body">
-          <textarea
-            v-model="input"
-            rows="2"
-            :placeholder="globalMode ? '向 AI 提问知识库全部视频内容' : '向 AI 提问当前视频内容'"
-            @focus="expanded = true"
-            @keydown.enter.exact.prevent="send(input)"
-          />
-          <div class="assistant-composer__tools">
-            <VideohubAgentPicker appearance="tool" />
+      <div ref="composerArea" class="assistant-composer-area" @focusin="handleComposerFocusin" @focusout="handleComposerFocusout">
+        <ReviewSuggestions v-if="composerFocused" class="assistant-suggestions" :items="suggestions" :disabled="isGenerating || preparingClassroom" @select="selectSuggestion" />
+        <form class="assistant-composer" @submit.prevent="send(input)">
+          <div class="assistant-composer__body">
+            <textarea
+              ref="composerInput"
+              v-model="input"
+              rows="1"
+              :placeholder="globalMode ? '向 AI 提问知识库全部视频内容' : '向 AI 提问当前视频内容'"
+              @focus="expanded = true"
+              @input="resizeComposerInput"
+              @keydown.enter.exact.prevent="send(input)"
+            />
           </div>
-        </div>
-        <div class="chat-actions">
-          <t-tooltip content="语音输入" placement="top">
-            <t-button class="chat-voice" type="button" shape="square" aria-label="语音输入" @click="showToolMessage('语音输入')">
-              <svg class="chat-voice__icon" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
-                <path d="M486.4 972.8v-128.9728A332.8 332.8 0 0 1 179.2 512a25.6 25.6 0 0 1 51.2 0 281.6 281.6 0 0 0 563.2 0 25.6 25.6 0 1 1 51.2 0 332.8 332.8 0 0 1-307.2 331.8272V972.8h153.6a25.6 25.6 0 1 1 0 51.2h-358.4a25.6 25.6 0 1 1 0-51.2h153.6zM512 51.2a153.6 153.6 0 0 0-153.6 153.6v307.2a153.6 153.6 0 0 0 307.2 0V204.8a153.6 153.6 0 0 0-153.6-153.6z m0-51.2a204.8 204.8 0 0 1 204.8 204.8v307.2a204.8 204.8 0 1 1-409.6 0V204.8a204.8 204.8 0 0 1 204.8-204.8z" fill="currentColor" />
-              </svg>
-            </t-button>
-          </t-tooltip>
-          <t-tooltip v-if="isGenerating" content="暂停生成" placement="top">
-            <t-button class="chat-send chat-pause" type="button" shape="square" aria-label="暂停生成" @click="pauseGeneration">
-              <t-icon name="pause-circle" />
-            </t-button>
-          </t-tooltip>
-          <t-button v-else class="chat-send" type="submit" shape="square" aria-label="发送" :disabled="!input.trim()">
-            <t-icon name="arrow-up" />
-          </t-button>
-        </div>
-      </form>
+          <div class="assistant-composer__controls">
+            <div class="assistant-composer__tools">
+              <VideohubAgentPicker appearance="tool" />
+            </div>
+            <div class="chat-actions">
+              <t-tooltip content="语音输入" placement="top">
+                <t-button class="chat-voice" type="button" shape="square" aria-label="语音输入" @click="showToolMessage('语音输入')">
+                  <svg class="chat-voice__icon" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
+                    <path d="M486.4 972.8v-128.9728A332.8 332.8 0 0 1 179.2 512a25.6 25.6 0 0 1 51.2 0 281.6 281.6 0 0 0 563.2 0 25.6 25.6 0 1 1 51.2 0 332.8 332.8 0 0 1-307.2 331.8272V972.8h153.6a25.6 25.6 0 1 1 0 51.2h-358.4a25.6 25.6 0 1 1 0-51.2h153.6zM512 51.2a153.6 153.6 0 0 0-153.6 153.6v307.2a153.6 153.6 0 0 0 307.2 0V204.8a153.6 153.6 0 0 0-153.6-153.6z m0-51.2a204.8 204.8 0 0 1 204.8 204.8v307.2a204.8 204.8 0 1 1-409.6 0V204.8a204.8 204.8 0 0 1 204.8-204.8z" fill="currentColor" />
+                  </svg>
+                </t-button>
+              </t-tooltip>
+              <t-tooltip v-if="isGenerating || canPauseReview" content="暂停生成" placement="top">
+                <t-button class="chat-send chat-pause" type="button" shape="square" :disabled="cancellingClassroom" aria-label="暂停生成" @click="pauseGeneration">
+                  <t-icon name="pause-circle" />
+                </t-button>
+              </t-tooltip>
+              <t-button v-else class="chat-send" type="submit" shape="square" aria-label="发送" :disabled="!input.trim()">
+                <t-icon name="arrow-up" />
+              </t-button>
+            </div>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 </template>
@@ -110,7 +123,7 @@ const assistantSessionCache = new Map<string, unknown>()
 </script>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { createChatTurn, loadChatSession } from '@/api/videohub/chat'
@@ -124,7 +137,8 @@ import { useSettingsStore } from '@/stores/settings'
 import { sanitizeMarkdownHTML } from '@/utils/security'
 import { configureMarkedForChatMarkdown, renderChatMarkdown } from '@/utils/chatMarkdownRenderer'
 import { shouldAutoRoute } from '@/api/videohub/chatRequest'
-import { isFirstReviewRequest, isReviewIntent, reviewRequestId, visibleReviewQuestion } from '@/api/videohub/reviewMaterials'
+import { isFirstReviewRequest, isReviewIntent, needsReviewCourseChoice, readReviewTaskAnchor, reviewRequestId, reviewTaskFallbackIndex, saveReviewTaskAnchor, visibleReviewQuestion } from '@/api/videohub/reviewMaterials'
+import { VIDSAGE_REASONING_AGENT_ID } from '@/api/agent'
 import { useReviewCourse } from '@/composables/useReviewCourse'
 import ReviewMaterialReply from './ReviewMaterialReply.vue'
 import ReviewCourseChooser from './ReviewCourseChooser.vue'
@@ -146,6 +160,11 @@ const emit = defineEmits<{ seek: [seconds: number]; navigate: [videoId: string, 
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
 const expanded = ref(false), input = ref(''), isGenerating = ref(false), messageArea = ref<HTMLElement | null>(null)
+const composerFocused = ref(false)
+const assistantFrame = ref<HTMLElement | null>(null)
+const composerArea = ref<HTMLElement | null>(null)
+const composerInput = ref<HTMLTextAreaElement | null>(null)
+const composerMaxHeight = 124
 const messages = ref<StreamingChatMessage[]>([])
 const activeSession = ref<ChatSession | null>(null)
 const lastUserQuery = ref('')
@@ -157,16 +176,88 @@ const suggestions = props.globalMode ? globalSuggestions : singleSuggestions
 let consumedExternalQuery = ''
 const streamingAssistantId = ref('')
 const stopCurrentTurn = ref<null | (() => Promise<void>)>(null)
+const activeReviewRequestId = ref('')
+let pauseRequested = false
 const recoveryStorage = getChatRecoveryStorage()
+const reviewAnchorRevision = ref(0)
 const welcomeQuote = ref<string>(learningQuotes[0])
 const classroomStorageKey = computed(() => `openmaic:${authStore.user?.id || ''}:${props.globalMode ? 'global' : props.currentVideo.id}`)
 const { choosingCourse, loadingCourses, courseError, courses, selectedCourseId, preparingClassroom,
-  classroomResult, classroomVideo, recentCourseIds, askCourse, loadCourses, cancelCourse, confirmCourse, startForVideo, updateStatus } = useReviewCourse({
+  classroomResult, classroomVideo, recentCourseIds, cancellingClassroom, cancelReview, askCourse, loadCourses, cancelCourse, confirmCourse, startForVideo, updateStatus } = useReviewCourse({
   userId: computed(() => authStore.user?.id || ''), storageKey: classroomStorageKey, busy: isGenerating,
-  onStart: instruction => send(instruction, true),
+  onStart: instruction => {
+    const requestId = reviewRequestId(instruction)
+    saveReviewTaskAnchor(recoveryStorage, authStore.user?.id || '', requestId, messages.value.length)
+    reviewAnchorRevision.value += 1
+    return send(instruction, true)
+  },
+})
+
+const canPauseReview = computed(() => Boolean(activeReviewRequestId.value
+  && classroomResult.value?.request_id === activeReviewRequestId.value
+  && ['queued', 'submitting', 'running'].includes(classroomResult.value.generation_status)))
+
+const reviewFallbackInsertIndex = computed(() => {
+  void reviewAnchorRevision.value
+  const requestId = classroomResult.value?.request_id || ''
+  const fallback = messages.value[0]?.id.startsWith('welcome-') ? 1 : 0
+  const anchor = readReviewTaskAnchor(recoveryStorage, authStore.user?.id || '', requestId, fallback)
+  return reviewTaskFallbackIndex(messages.value, requestId, anchor)
 })
 
 const firstQuestion = computed(() => visibleQuestion(messages.value.find(message => message.sender === 'user')?.text || ''))
+
+function handleComposerFocusin() {
+  composerFocused.value = true
+  void nextTick(resizeComposerInput)
+}
+
+function collapseAssistant() {
+  expanded.value = false
+  composerFocused.value = false
+  composerInput.value?.blur()
+  resizeComposerInput()
+}
+
+function handleComposerFocusout(event: FocusEvent) {
+  const area = event.currentTarget as HTMLElement
+  const nextTarget = event.relatedTarget
+  if (nextTarget instanceof Node && area.contains(nextTarget)) return
+  if (nextTarget instanceof Element && nextTarget.closest('.picker-dropdown')) return
+  composerFocused.value = false
+  resizeComposerInput()
+}
+
+function handleDocumentPointerdown(event: PointerEvent) {
+  if (!composerFocused.value) return
+  const target = event.target
+  if (!(target instanceof Node)) return
+  if (target instanceof Element && target.closest('.assistant-collapse')) return
+  if (composerArea.value?.contains(target)) return
+  if (target instanceof Element && target.closest('.picker-dropdown')) return
+  composerFocused.value = false
+  resizeComposerInput()
+  if (!assistantFrame.value?.contains(target)) expanded.value = false
+}
+
+function resizeComposerInput() {
+  const textarea = composerInput.value
+  if (!textarea) return
+  if (!composerFocused.value) {
+    textarea.style.height = ''
+    textarea.style.overflowY = 'hidden'
+    return
+  }
+  textarea.style.height = 'auto'
+  const height = Math.min(textarea.scrollHeight, composerMaxHeight)
+  textarea.style.height = `${height}px`
+  textarea.style.overflowY = textarea.scrollHeight > composerMaxHeight ? 'auto' : 'hidden'
+}
+
+watch(input, () => { void nextTick(resizeComposerInput) })
+
+onMounted(() => document.addEventListener('pointerdown', handleDocumentPointerdown, true))
+onBeforeUnmount(() => document.removeEventListener('pointerdown', handleDocumentPointerdown, true))
 
 // Presentation is derived from our own command, never from model output.
 function isReinforcementInstruction(text: string) {
@@ -404,11 +495,15 @@ function selectTimestamp(part: TimestampPart) {
   if (!props.globalMode) emit('seek', part.seconds)
 }
 async function scrollBottom() { await nextTick(); if (messageArea.value) messageArea.value.scrollTop = messageArea.value.scrollHeight }
-function pauseGeneration() {
+async function pauseGeneration() {
+  if (cancellingClassroom.value) return
+  const requestId = activeReviewRequestId.value
+  const revision = scopeRevision
+  pauseRequested = true
   const stop = stopCurrentTurn.value
-  if (!stop) return
   stopCurrentTurn.value = null
-  void stop()
+  if (stop) void stop().catch(() => { /* Task cancellation still proceeds if chat stop fails. */ })
+  if (requestId && await cancelReview(requestId) && revision === scopeRevision) activeReviewRequestId.value = ''
 }
 function startMessageEdit(message: StreamingChatMessage) {
   if (isGenerating.value || message.sender !== 'user') return
@@ -427,8 +522,12 @@ async function resendEditedMessage() {
 }
 async function send(value: string, reinforcement = false) {
   const question = value.trim(); if (!question || isGenerating.value) return
-  if (!reinforcement && isReviewIntent(question)) { await startKnowledgeReinforcement(); return }
+  if (cancellingClassroom.value) return
+  if (!reinforcement && needsReviewCourseChoice(question)) { await startKnowledgeReinforcement(); return }
   if (!reinforcement && preparingClassroom.value) return
+  const reviewTurn = reinforcement || isReviewIntent(question)
+  activeReviewRequestId.value = reviewRequestId(question)
+  pauseRequested = false
   const scopeKey = sessionCacheKey.value
   const revision = scopeRevision
   const isCurrentScope = () => scopeKey === sessionCacheKey.value && revision === scopeRevision
@@ -461,15 +560,15 @@ async function send(value: string, reinforcement = false) {
       currentVideo: props.currentVideo,
       currentTime: props.currentTime,
       globalMode: props.globalMode,
-      agentId: reinforcement ? undefined : settingsStore.selectedAgentId,
-      agentEnabled: reinforcement || settingsStore.isAgentEnabled,
-      autoRoute: reinforcement || shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
-      agentSourceTenantId: reinforcement ? undefined : settingsStore.selectedAgentSourceTenantId,
-      skillNames: reinforcement ? ['openmaic-classroom'] : undefined,
+      agentId: reviewTurn ? VIDSAGE_REASONING_AGENT_ID : settingsStore.selectedAgentId,
+      agentEnabled: reviewTurn || settingsStore.isAgentEnabled,
+      autoRoute: reviewTurn ? false : shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
+      agentSourceTenantId: reviewTurn ? undefined : settingsStore.selectedAgentSourceTenantId,
+      skillNames: reviewTurn ? ['openmaic-classroom'] : undefined,
       session: activeSession.value || undefined,
       onSessionCreated: session => { if (isCurrentScope()) materializeActiveSession(session) },
       onStreamMessage: updateStreamingMessage,
-      onStopReady: stop => { if (isCurrentScope()) stopCurrentTurn.value = stop; else void stop() },
+      onStopReady: stop => { if (isCurrentScope() && !pauseRequested) stopCurrentTurn.value = stop; else void stop() },
     })
     if (!isCurrentScope()) return
     activeSession.value = session
@@ -487,6 +586,8 @@ async function send(value: string, reinforcement = false) {
 }
 watch(sessionCacheKey, () => {
   scopeRevision += 1
+  activeReviewRequestId.value = ''
+  pauseRequested = false
   void stopCurrentTurn.value?.()
   input.value = ''; isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null
   if (expanded.value) rotateWelcomeQuote()
@@ -761,6 +862,12 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   flex: 0 0 auto;
   padding: 12px 16px;
 }
+.assistant-composer-area {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-width: 0;
+}
 .assistant-review-reply { margin-bottom: 20px; }
 
 .assistant-composer {
@@ -779,12 +886,20 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   min-width: 0;
 }
 
+.assistant-composer__controls {
+  display: flex;
+  align-self: end;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
 .assistant-composer textarea {
   display: block;
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  min-height: 56px;
+  max-height: 124px;
   resize: none;
   padding: 4px 0 10px;
   border: 0;
@@ -792,9 +907,14 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   background: transparent;
   color: var(--td-text-color-primary);
   font: var(--td-font-body-medium);
-  line-height: 1.6;
+  overflow-y: hidden;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  transition: height 120ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-composer textarea { transition: none; }
 }
 
 .assistant-composer textarea::-webkit-scrollbar,
@@ -816,18 +936,26 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   flex: 0 0 auto;
 }
 
+.assistant-composer__tools :deep(.picker-chip__label) {
+  max-width: clamp(56px, 18vw, 120px);
+}
+
 .chat-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .chat-send,
 .chat-voice {
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  padding: 0;
+  border: 0;
   border-radius: var(--td-radius-large);
+  transition: background-color 150ms ease, box-shadow 150ms ease, color 150ms ease, transform 150ms ease;
 }
 
 .chat-send {
@@ -841,25 +969,34 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   align-items: center;
   justify-content: center;
   color: var(--td-text-color-secondary);
-  border: 1px solid var(--td-component-stroke);
   background: transparent;
   box-shadow: none;
 }
 
+.chat-actions :deep(svg) {
+  width: 16px;
+  height: 16px;
+}
+
 .chat-voice__icon {
-  width: 18px;
-  height: 18px;
   display: block;
 }
 
-.chat-send:hover {
+.chat-send:not(:disabled):hover,
+.chat-send:not(:disabled):focus-visible {
+  border: 0;
   background: var(--td-brand-color-active);
+  box-shadow: 0 0 0 3px var(--td-brand-color-light), 0 8px 16px rgba(7, 192, 95, .28);
+  transform: translateY(-1px);
 }
 
-.chat-voice:hover {
-  border-color: var(--td-component-stroke-hover);
-  background: var(--td-bg-color-secondarycontainer);
-  color: var(--td-text-color-primary);
+.chat-voice:hover,
+.chat-voice:focus-visible {
+  border: 0;
+  background: var(--td-brand-color-light);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--td-brand-color) 16%, transparent);
+  color: var(--td-brand-color);
+  transform: translateY(-1px);
 }
 
 .chat-send:disabled {

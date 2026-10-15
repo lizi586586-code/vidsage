@@ -70,6 +70,20 @@ type VideoTranscriptChunk struct {
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
+// VideoWikiRelation stores a derived, validated explanation for one native
+// Wiki edge. It never writes the explanation back to WeKnora.
+type VideoWikiRelation struct {
+	VideoID        string    `gorm:"type:varchar(36);primaryKey" json:"video_id"`
+	SummarySlug    string    `gorm:"type:varchar(255);primaryKey" json:"summary_slug"`
+	TargetSlug     string    `gorm:"type:varchar(255);primaryKey" json:"target_slug"`
+	SummaryVersion int       `gorm:"not null" json:"summary_version"`
+	TargetVersion  int       `gorm:"not null" json:"target_version"`
+	Relation       string    `gorm:"type:text;not null" json:"relation"`
+	EvidenceQuote  string    `gorm:"type:text;not null" json:"-"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 // VideoProcessingJob 视频处理任务状态机
 type VideoProcessingJob struct {
 	ID                   string     `gorm:"type:varchar(36);primaryKey" json:"id"`

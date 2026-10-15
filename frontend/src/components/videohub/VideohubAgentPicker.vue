@@ -46,10 +46,9 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/settings'
 import { useChatResourcesStore } from '@/stores/chatResources'
-import { BUILTIN_QUICK_ANSWER_ID } from '@/api/agent'
+import { BUILTIN_QUICK_ANSWER_ID, VIDSAGE_REASONING_AGENT_ID } from '@/api/agent'
 
-const CUSTOM_AGENT_ID = '6f3691c2-8d15-48f8-b1f4-dfadd222ca53'
-const ALLOWED_IDS = [BUILTIN_QUICK_ANSWER_ID, CUSTOM_AGENT_ID] as const
+const ALLOWED_IDS = [BUILTIN_QUICK_ANSWER_ID, VIDSAGE_REASONING_AGENT_ID] as const
 
 interface DisplayAgent {
   id: string

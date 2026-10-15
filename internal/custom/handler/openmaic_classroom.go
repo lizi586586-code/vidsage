@@ -79,6 +79,60 @@ func (h *OpenMAICClassroomHandler) Status(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": classroom})
 }
 
+// Cancel commits the terminal state before discarding inputs, under Claim's mutex.
+func (h *OpenMAICClassroomHandler) Cancel(c *gin.Context) {
+	learner, ok := h.learner(c)
+	if !ok {
+		return
+	}
+	var input *struct{}
+	d := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, 1024))
+	d.DisallowUnknownFields()
+	var extra any
+	if err := d.Decode(&input); err != nil || input == nil {
+		c.JSON(400, gin.H{"success": false, "error": "invalid_request"})
+		return
+	}
+	if d.Decode(&extra) != io.EOF {
+		c.JSON(400, gin.H{"success": false, "error": "invalid_request"})
+		return
+	}
+	requestID := strings.TrimSpace(c.Param("requestID"))
+	var classroom model.OpenMAICClassroom
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("learner_id = ? AND request_id = ?", learner, requestID).First(&classroom).Error; err != nil {
+			return err
+		}
+		switch classroom.GenerationStatus {
+		case "cancelled":
+			return nil
+		case "queued", "submitting", "running":
+			classroom.GenerationStatus = "cancelled"
+			classroom.LastErrorCode = "user_cancelled"
+			classroom.ClassroomID = ""
+			classroom.ClassroomURL = ""
+			return tx.Save(&classroom).Error
+		default:
+			return errors.New("task_not_cancellable")
+		}
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			c.JSON(404, gin.H{"success": false, "error": "classroom_not_found"})
+		case err.Error() == "task_not_cancellable":
+			c.JSON(409, gin.H{"success": false, "error": "task_not_cancellable"})
+		default:
+			c.JSON(500, gin.H{"success": false, "error": "cancel_request_failed"})
+		}
+		return
+	}
+	delete(h.contexts, requestID)
+	c.JSON(200, gin.H{"success": true, "data": classroom})
+}
+
 // Pending is only for the bridge reconciliation loop. It makes a restart
 // recover outstanding remote jobs without exposing them to browsers.
 func (h *OpenMAICClassroomHandler) Pending(c *gin.Context) {
@@ -186,6 +240,9 @@ func (h *OpenMAICClassroomHandler) SyncStatus(c *gin.Context) {
 		if result.Error == gorm.ErrRecordNotFound {
 			return gorm.ErrRecordNotFound
 		} else {
+			if classroom.GenerationStatus == "cancelled" {
+				return nil
+			}
 			if input.LearnerID != "" && input.LearnerID != classroom.LearnerID || classroom.JobID != "" && input.JobID != "" && input.JobID != classroom.JobID || classroom.ClassroomID != "" && input.ClassroomID != "" && input.ClassroomID != classroom.ClassroomID {
 				return errors.New("classroom_binding_conflict")
 			}

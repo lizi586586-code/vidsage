@@ -197,6 +197,7 @@ func TestNativeWikiGraphProxiesVerifiedSummaryEgoGraph(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.Equal(t, "/api/v1/knowledgebase/kb-1/wiki/graph?center=typed-summary%2F"+video.ID+"&depth=1&limit=100&mode=ego", graphRequestURL)
+	require.NotContains(t, recorder.Body.String(), "relations")
 }
 
 func TestSummaryNotGeneratedReturnsStructuredStageStatus(t *testing.T) {

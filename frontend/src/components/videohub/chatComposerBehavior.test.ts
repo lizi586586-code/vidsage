@@ -28,7 +28,9 @@ for (const scenario of cases) {
       const context = {
         input: { value: '' }, question: { value: '' }, followUp: { value: '' },
         expanded: { value: false }, isGenerating: { value: false },
+        cancellingClassroom: { value: false }, activeReviewRequestId: { value: '' }, pauseRequested: false,
         preparingClassroom: { value: false }, isReviewIntent: () => false,
+        needsReviewCourseChoice: () => false,
         reviewRequestId: () => '', visibleReviewQuestion: (value: string) => value,
         turnRevision: 0, scopeRevision: 0, sessionCacheKey: { value: 'test-scope' },
         lastUserQuery: { value: '' }, streamingAssistantId: { value: '' }, stopCurrentTurn: { value: null },
@@ -39,6 +41,7 @@ for (const scenario of cases) {
         scrollBottom: async () => {}, pushStreamingPlaceholder: () => 'assistant',
         persistPendingQuestion: () => {}, writeChatRecovery: () => {}, clearChatRecovery: () => {},
         assistantRecoveryKey: () => 'test', shouldAutoRoute: () => true,
+        currentChatMessageTime: () => '12:00',
         materializeActiveSession: () => {}, materializePendingSession: () => {},
         updateStreamingMessage: () => {}, cacheSession: () => {}, welcome: () => ({}),
         route: { name: 'aiChat' },
@@ -78,7 +81,10 @@ test('reviewing a different course bypasses the old video scope and preserves th
   let submittedOptions: Record<string, unknown> = {}
   const context = {
     followUp: { value: 'confirmed-new-course-request' }, isGenerating: { value: false },
+    cancellingClassroom: { value: false }, activeReviewRequestId: { value: '' }, pauseRequested: false,
     preparingClassroom: { value: false }, isReviewIntent: () => false,
+    needsReviewCourseChoice: () => false,
+    VIDSAGE_REASONING_AGENT_ID: 'reasoning',
     reviewRequestId: () => 'new-course-request-id', turnRevision: 0,
     activeSession: { value: original }, sessions: { value: [original] },
     lastUserQuery: { value: '' }, streamingAssistantId: { value: '' }, stopCurrentTurn: { value: null },
@@ -88,6 +94,7 @@ test('reviewing a different course bypasses the old video scope and preserves th
       return { id: original.id, type: 'chat', scope: 'global', tenantId: 'tenant', messages: [{ sender: 'assistant', text: 'done' }] }
     },
     persistPendingQuestion: () => {}, clearChatRecovery: () => {}, shouldAutoRoute: () => false,
+    currentChatMessageTime: () => '12:00',
     scrollBottom: async () => {}, pushStreamingPlaceholder: () => 'assistant', updateStreamingMessage: () => {},
   }
   const run = runInNewContext(`${ts.transpile(method, { target: ts.ScriptTarget.ES2022 })}\ncontinueSession`, context)

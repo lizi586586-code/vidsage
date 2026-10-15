@@ -39,6 +39,7 @@ type Deps struct {
 	Graph                 knowledgegraph.Store
 	TrainingOrchestration TrainingOrchestrationAPI
 	MeetingOrchestration  MeetingOrchestrationAPI
+	RelatedWikiLLM        RelatedWikiLLM
 }
 
 // NewRouter 构建自研后端路由。
@@ -299,6 +300,7 @@ func buildRouter(deps *Deps) *gin.Engine {
 	classroom := NewOpenMAICClassroomHandler(deps.DB, bridgeSecret, nativeURL)
 	api.POST("/learning/openmaic/prepare", classroom.Prepare)
 	api.POST("/learning/openmaic/:requestID/claim", classroom.Claim)
+	api.POST("/learning/openmaic/:requestID/cancel", classroom.Cancel)
 	api.GET("/learning/openmaic/:classroomID/status", classroom.Status)
 	api.GET("/learning/openmaic/pending", classroom.Pending)
 	api.POST("/learning/openmaic/status", classroom.SyncStatus)
@@ -330,9 +332,11 @@ func buildRouter(deps *Deps) *gin.Engine {
 
 	if deps.Wiki != nil {
 		ch := NewContentHandler(deps.DB, deps.Wiki, roles.Knowledge, deps.Graph)
+		ch.LLM = deps.RelatedWikiLLM
 		videos := api.Group("/videos/:id")
 		videos.GET("/wiki-graph-context", ch.NativeWikiGraphContext)
 		videos.GET("/wiki-graph", ch.NativeWikiGraph)
+		videos.GET("/wiki-relations", ch.NativeWikiRelations)
 		videos.GET("/related-knowledge", ch.RelatedKnowledge)
 		videos.GET("/outline", ch.Outline)
 		videos.GET("/overview", ch.Overview)

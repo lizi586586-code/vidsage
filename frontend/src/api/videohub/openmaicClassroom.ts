@@ -4,7 +4,7 @@ export type OpenMAICCompletionStatus = 'not_started' | 'in_progress' | 'complete
 
 export interface OpenMAICClassroomStatus {
   request_id: string
-  generation_status: 'queued' | 'submitting' | 'running' | 'succeeded' | 'failed'
+  generation_status: 'queued' | 'submitting' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   progress?: number | null
   classroom_id: string
   classroom_url: string
@@ -27,4 +27,17 @@ export async function fetchOpenMAICClassroomStatus(classroomID: string): Promise
   )
   if (!response.success || !response.data) throw new Error('课程状态暂不可用')
   return response.data
+}
+
+export async function cancelOpenMAICClassroom(requestId: string): Promise<OpenMAICClassroomStatus> {
+  try {
+    const response = await post<{ success: boolean; data?: OpenMAICClassroomStatus; error?: string }>(
+      `/api/custom/learning/openmaic/${encodeURIComponent(requestId)}/cancel`, {},
+    )
+    if (!response.success || !response.data) throw { status: 500, message: response.error || 'cancel_request_failed' }
+    return response.data
+  } catch (error) {
+    const failure = error as { status?: number; message?: string; error?: string }
+    throw { ...failure, code: failure.error || (failure.status ? failure.message : 'cancel_request_failed') }
+  }
 }

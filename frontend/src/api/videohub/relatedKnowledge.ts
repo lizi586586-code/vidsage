@@ -27,3 +27,9 @@ export async function fetchNativeWikiGraph(videoId: string): Promise<WikiGraphDa
   const response: any = await get(`/api/custom/videos/${videoId}/wiki-graph`)
   return response?.data || response
 }
+
+export async function fetchNativeWikiRelations(videoId: string): Promise<Record<string, string>> {
+  const response: any = await get(`/api/custom/videos/${videoId}/wiki-relations`)
+  const payload = response?.data || response
+  return payload?.relations || {}
+}

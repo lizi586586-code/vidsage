@@ -27,15 +27,57 @@ export function isFirstReviewRequest(messages: readonly { sender: string; text: 
   return Boolean(requestId) && !messages.slice(0, index).some(item => item.sender === 'user' && reviewRequestId(item.text) === requestId)
 }
 
+type ReviewTaskAnchorStorage = Pick<Storage, 'getItem' | 'setItem'>
+
+export function reviewTaskAnchorKey(userId: string, requestId: string): string {
+  return `openmaic-anchor:${userId}:${requestId}`
+}
+
+export function saveReviewTaskAnchor(storage: ReviewTaskAnchorStorage | null, userId: string, requestId: string, precedingMessageCount: number) {
+  if (!storage || !userId || !requestId || !Number.isInteger(precedingMessageCount) || precedingMessageCount < 0) return
+  try { storage.setItem(reviewTaskAnchorKey(userId, requestId), String(precedingMessageCount)) } catch { /* The active view still keeps the request message as its primary anchor. */ }
+}
+
+export function readReviewTaskAnchor(storage: ReviewTaskAnchorStorage | null, userId: string, requestId: string, fallback: number): number {
+  if (!storage || !userId || !requestId) return fallback
+  try {
+    const stored = storage.getItem(reviewTaskAnchorKey(userId, requestId))
+    if (stored === null) return fallback
+    const value = Number(stored)
+    return Number.isInteger(value) && value >= 0 ? value : fallback
+  } catch { return fallback }
+}
+
+export function reviewTaskFallbackIndex(
+  messages: readonly { sender: string; text: string }[],
+  requestId: string,
+  precedingMessageCount: number,
+): number {
+  if (!requestId || messages.some(message => message.sender === 'user' && reviewRequestId(message.text) === requestId)) return -1
+  const safeAnchor = Number.isInteger(precedingMessageCount) && precedingMessageCount >= 0 ? precedingMessageCount : 0
+  return Math.min(safeAnchor, messages.length)
+}
+
 export function isReviewIntent(text: string): boolean {
-  return ['巩固学习', reviewUserText, reviewAssistantText].includes(text.trim())
+  const value = text.trim().replace(/\s+/g, '')
+  if ([reviewUserText, reviewAssistantText].includes(value)) return true
+  if (/(?:不想|不要|不需要|暂不|无需).{0,4}(?:巩固|复习|温习|回顾|强化|重新学习|再学)/u.test(value)) return false
+
+  const hasReviewAction = /(巩固|复习|温习|回顾|查漏补缺|重新学习|再学一遍|强化(?:学习|掌握|记忆)|加深(?:理解|记忆))/u.test(value)
+  const hasLearningObject = /(课程|知识库|视频|知识|学习|理解|掌握|记忆|内容)/u.test(value)
+  return hasReviewAction && hasLearningObject
+}
+
+export function needsReviewCourseChoice(text: string): boolean {
+  return ['巩固学习', reviewUserText].includes(text.trim())
 }
 
 export function isReviewPending(task: OpenMAICClassroomStatus | null | undefined): boolean {
-  return Boolean(task && !['succeeded', 'failed'].includes(task.generation_status))
+  return Boolean(task && !['succeeded', 'failed', 'cancelled'].includes(task.generation_status))
 }
 
 export function reviewCardPresentation(task?: OpenMAICClassroomStatus | null) {
+  if (task?.generation_status === 'cancelled') return { state: 'cancelled', title: '复习材料暂停生成', href: '' }
   if (task?.generation_status === 'failed') return { state: 'failed', title: '复习材料生成失败', href: '' }
   if (task?.generation_status === 'succeeded') {
     let href = ''

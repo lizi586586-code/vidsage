@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { isFirstReviewRequest, isReviewIntent, reviewAssistantText, reviewCardPresentation, reviewInstruction, reviewRequestId, visibleReviewQuestion } from './reviewMaterials'
+import { isFirstReviewRequest, isReviewIntent, needsReviewCourseChoice, readReviewTaskAnchor, reviewAssistantText, reviewCardPresentation, reviewInstruction, reviewRequestId, reviewTaskAnchorKey, reviewTaskFallbackIndex, saveReviewTaskAnchor, visibleReviewQuestion } from './reviewMaterials'
 import type { OpenMAICClassroomStatus } from './openmaicClassroom'
 
 const task: OpenMAICClassroomStatus = { request_id: 'request-1', generation_status: 'running', classroom_id: 'stage-test', classroom_url: 'https://open.maic.chat/classroom/stage-test', status: 'not_started' }
+test('cancelled review keeps the paused title and never exposes a late classroom link', () => {
+  assert.deepEqual(reviewCardPresentation({ ...task, generation_status: 'cancelled' }), {
+    state: 'cancelled', title: '复习材料暂停生成', href: '',
+  })
+})
 test('queued retries keep one card per request without hiding later independent tasks', () => {
   const messages = [
     { sender: 'user', text: reviewInstruction('request-1') },
@@ -14,6 +19,33 @@ test('queued retries keep one card per request without hiding later independent 
   ]
   assert.deepEqual(messages.map((_, index) => isFirstReviewRequest(messages, index)), [true, false, false, true, false])
 })
+test('a restored review task keeps its original position when later turns are appended', () => {
+  const beforeReview = [
+    { sender: 'user', text: '第一问' },
+    { sender: 'assistant', text: '第一答' },
+  ]
+  const afterSecondTurn = [
+    ...beforeReview,
+    { sender: 'user', text: '第二问' },
+    { sender: 'assistant', text: '第二答' },
+  ]
+  assert.equal(reviewTaskFallbackIndex(afterSecondTurn, 'request-1', beforeReview.length), 2)
+  assert.equal(reviewTaskFallbackIndex([
+    ...beforeReview,
+    { sender: 'user', text: reviewInstruction('request-1') },
+  ], 'request-1', beforeReview.length), -1)
+})
+test('review task anchors persist only a request-scoped message position', () => {
+  const values = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+  }
+  saveReviewTaskAnchor(storage, 'user-1', 'request-1', 3)
+  assert.equal(values.get(reviewTaskAnchorKey('user-1', 'request-1')), '3')
+  assert.equal(readReviewTaskAnchor(storage, 'user-1', 'request-1', 0), 3)
+  assert.equal(readReviewTaskAnchor(storage, 'user-1', 'missing', 1), 1)
+})
 test('only our internal command is replaced with the approved user copy', () => {
   const id = 'db623132-186c-457e-b515-1424a4fbe868'
   assert.equal(reviewRequestId(reviewInstruction(id)), id)
@@ -21,8 +53,23 @@ test('only our internal command is replaced with the approved user copy', () => 
   assert.equal(visibleReviewQuestion('正常课程问题'), '正常课程问题')
   assert.ok(isReviewIntent('巩固学习'))
   assert.ok(isReviewIntent('帮我定制复习材料'))
-  assert.equal(isReviewIntent('请总结巩固学习的方法'), false)
+  assert.ok(isReviewIntent('我想巩固学习《提示词基础》'))
+  assert.ok(isReviewIntent('我想复习ai知识库的课程'))
+  assert.ok(isReviewIntent('复习 AI 知识库的课程'))
+  assert.ok(isReviewIntent('帮我复习这门视频课程'))
+  assert.ok(isReviewIntent('温习一下 AI 课程'))
+  assert.ok(isReviewIntent('对知识库内容查漏补缺'))
+  assert.ok(isReviewIntent('重新学习提示词课程'))
+  assert.ok(isReviewIntent('强化掌握这个知识点'))
+  assert.ok(isReviewIntent('回顾这门课程'))
+  assert.equal(isReviewIntent('复习一下今天的会议'), false)
+  assert.equal(isReviewIntent('暂不需要复习这门课程'), false)
   assert.equal(reviewAssistantText, '按照课程材料，课程要求以及你的学习偏好，为你定制复习材料')
+})
+test('only explicit course-less review entry copy opens the course chooser', () => {
+  assert.ok(needsReviewCourseChoice('巩固学习'))
+  assert.ok(needsReviewCourseChoice('帮我定制复习材料'))
+  assert.equal(needsReviewCourseChoice('帮我巩固学习任意课程'), false)
 })
 test('real zero and fractional progress are shown; missing or invalid progress stays unknown', () => {
   for (const progress of [0, 32, 46.5, 100]) {

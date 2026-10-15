@@ -16,13 +16,47 @@ test('video assistant suggestion chips trigger chat as plain buttons', () => {
   )
 })
 
+test('video assistant keeps suggestions focus-scoped and auto-grows the composer up to five lines', () => {
+  const template = componentSource.split('<script')[0]
+  const composer = template.match(/<div[^>]*class="assistant-composer-area"[\s\S]*?<\/div>\s*<\/div>/)?.[0] || ''
+  const textarea = template.match(/<textarea\s+ref="composerInput"[\s\S]*?\/>/)?.[0] || ''
+  assert.match(composer, /ref="composerArea"/)
+  assert.match(composer, /@focusin="handleComposerFocusin"/)
+  assert.match(composer, /@focusout="handleComposerFocusout"/)
+  assert.match(composer, /<ReviewSuggestions v-if="composerFocused"/)
+  assert.match(textarea, /rows="1"/)
+  assert.match(textarea, /@input="resizeComposerInput"/)
+  assert.match(componentSource, /const composerMaxHeight = 124/)
+  assert.match(componentSource, /Math\.min\(textarea\.scrollHeight, composerMaxHeight\)/)
+  assert.match(componentSource, /textarea\.scrollHeight > composerMaxHeight \? 'auto' : 'hidden'/)
+  assert.match(componentSource, /max-height:\s*124px/)
+  const textareaStyle = componentSource.match(/\.assistant-composer textarea\s*\{([^}]*)}/)?.[1] || ''
+  assert.match(textareaStyle, /font:\s*var\(--td-font-body-medium\)/)
+  assert.doesNotMatch(textareaStyle, /(?:^|;)\s*(?:height|min-height):\s*36px/)
+  const focusout = componentSource.match(/function handleComposerFocusout\(event: FocusEvent\)[\s\S]*?\n}/)?.[0] || ''
+  assert.match(focusout, /area\.contains\(nextTarget\)/)
+  assert.match(focusout, /nextTarget\.closest\('\.picker-dropdown'\)/)
+  assert.match(focusout, /composerFocused\.value = false\s*resizeComposerInput\(\)/)
+  const resize = componentSource.match(/function resizeComposerInput\(\)[\s\S]*?\n}/)?.[0] || ''
+  assert.match(resize, /if \(!composerFocused\.value\)/)
+  assert.match(resize, /textarea\.style\.height = ''/)
+  assert.match(componentSource, /document\.addEventListener\('pointerdown', handleDocumentPointerdown, true\)/)
+  assert.match(componentSource, /document\.removeEventListener\('pointerdown', handleDocumentPointerdown, true\)/)
+  const outsidePointer = componentSource.match(/function handleDocumentPointerdown\(event: PointerEvent\)[\s\S]*?\n}/)?.[0] || ''
+  assert.match(template, /ref="assistantFrame"/)
+  assert.match(outsidePointer, /composerArea\.value\?\.contains\(target\)/)
+  assert.match(outsidePointer, /target\.closest\('\.picker-dropdown'\)/)
+  assert.match(outsidePointer, /composerFocused\.value = false\s*resizeComposerInput\(\)/)
+  assert.match(outsidePointer, /if \(!assistantFrame\.value\?\.contains\(target\)\) expanded\.value = false/)
+})
+
 test('video assistant input unlocks after chat turn finalizes', () => {
   assert.match(componentSource, /finally\s*\{[^}]*isGenerating\.value\s*=\s*false/s)
   assert.match(componentSource, /finally\s*\{[^}]*streamingAssistantId\.value\s*=\s*''/s)
 })
 
 test('video assistant clears the sent draft while keeping the composer editable during generation', () => {
-  const input = componentSource.match(/<textarea\s+v-model="input"[^>]*>/)?.[0] || ''
+  const input = componentSource.match(/<textarea\b[^>]*v-model="input"[^>]*>/)?.[0] || ''
   assert.ok(input)
   assert.doesNotMatch(input, /disabled|readonly/)
   const send = componentSource.match(/async function send\(value: string, reinforcement = false\) \{[\s\S]*?\n}/)?.[0] || ''
@@ -36,19 +70,36 @@ test('video assistant hides attachments and places the custom microphone before 
   const template = componentSource.split('<script')[0]
   assert.doesNotMatch(template, /添加附件|name="attach"|tool-label="自动路由"/)
   assert.match(template, /<VideohubAgentPicker appearance="tool" \/>/)
-  assert.match(template, /class="chat-actions"[\s\S]*?<t-tooltip content="语音输入"[\s\S]*?class="chat-voice"[\s\S]*?<svg class="chat-voice__icon" viewBox="0 0 1024 1024"[\s\S]*?<t-tooltip v-if="isGenerating" content="暂停生成"[\s\S]*?class="chat-send chat-pause"/)
+  assert.match(template, /class="chat-actions"[\s\S]*?<t-tooltip content="语音输入"[\s\S]*?class="chat-voice"[\s\S]*?<svg class="chat-voice__icon" viewBox="0 0 1024 1024"[\s\S]*?<t-tooltip v-if="isGenerating \|\| canPauseReview" content="暂停生成"[\s\S]*?class="chat-send chat-pause"/)
   assert.match(template, /class="chat-actions"[\s\S]*?<t-tooltip content="语音输入"[\s\S]*?class="chat-voice"[\s\S]*?<svg class="chat-voice__icon" viewBox="0 0 1024 1024"[\s\S]*?class="chat-send"[^>]*type="submit"/)
-  assert.match(componentSource, /\.chat-actions\s*\{[^}]*display:\s*flex[^}]*gap:\s*8px/s)
-  assert.match(componentSource, /\.chat-send,\s*\.chat-voice\s*\{[^}]*width:\s*36px[^}]*height:\s*36px/s)
+  assert.match(template, /class="assistant-composer__controls"[\s\S]*?<VideohubAgentPicker appearance="tool" \/>[\s\S]*?class="chat-actions"/)
+  assert.match(componentSource, /\.assistant-composer\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/s)
+  assert.match(componentSource, /\.chat-actions\s*\{[^}]*display:\s*flex[^}]*gap:\s*4px/s)
+  assert.match(componentSource, /\.chat-send,\s*\.chat-voice\s*\{[^}]*width:\s*28px[^}]*height:\s*28px[^}]*flex:\s*0 0 28px[^}]*border:\s*0/s)
   assert.match(componentSource, /\.chat-voice\s*\{[^}]*background:\s*transparent[^}]*box-shadow:\s*none/s)
-  assert.match(componentSource, /\.chat-voice__icon\s*\{[^}]*width:\s*18px[^}]*height:\s*18px/s)
+  assert.match(componentSource, /\.chat-actions :deep\(svg\)\s*\{[^}]*width:\s*16px[^}]*height:\s*16px/s)
+  assert.match(componentSource, /\.chat-send:not\(:disabled\):hover,\s*\.chat-send:not\(:disabled\):focus-visible\s*\{[^}]*border:\s*0[^}]*background:\s*var\(--td-brand-color-active\)[^}]*box-shadow:[^}]*transform:\s*translateY\(-1px\)/s)
+  assert.match(componentSource, /\.chat-voice:hover,\s*\.chat-voice:focus-visible\s*\{[^}]*border:\s*0[^}]*background:\s*var\(--td-brand-color-light\)[^}]*box-shadow:[^}]*color:\s*var\(--td-brand-color\)[^}]*transform:\s*translateY\(-1px\)/s)
+})
+
+test('collapsing the video assistant also restores the composer to one line', () => {
+  const template = componentSource.split('<script')[0]
+  assert.match(template, /class="assistant-collapse"[^>]*aria-label="收起"[^>]*@pointerdown\.prevent\.stop="collapseAssistant"[^>]*@click="collapseAssistant"/)
+  const collapse = componentSource.match(/function collapseAssistant\(\)[\s\S]*?\n}/)?.[0] || ''
+  assert.match(collapse, /expanded\.value = false/)
+  assert.match(collapse, /composerFocused\.value = false/)
+  assert.match(collapse, /composerInput\.value\?\.blur\(\)/)
+  assert.match(collapse, /resizeComposerInput\(\)/)
+  const outsidePointer = componentSource.match(/function handleDocumentPointerdown\(event: PointerEvent\)[\s\S]*?\n}/)?.[0] || ''
+  assert.match(outsidePointer, /target\.closest\('\.assistant-collapse'\)\) return/)
+  assert.ok(outsidePointer.indexOf("target.closest('.assistant-collapse')") < outsidePointer.indexOf('composerFocused.value = false'))
 })
 
 test('video assistant swaps the send action for an icon-only pause control while generating', () => {
-  assert.match(componentSource, /<t-tooltip v-if="isGenerating" content="暂停生成"/)
+  assert.match(componentSource, /<t-tooltip v-if="isGenerating \|\| canPauseReview" content="暂停生成"/)
   assert.match(componentSource, /aria-label="暂停生成" @click="pauseGeneration"/)
   assert.match(componentSource, /<t-icon name="pause-circle" \/>/)
-  assert.match(componentSource, /onStopReady: stop => \{ if \(isCurrentScope\(\)\) stopCurrentTurn\.value = stop/)
+  assert.match(componentSource, /onStopReady: stop => \{ if \(isCurrentScope\(\) && !pauseRequested\) stopCurrentTurn\.value = stop/)
 })
 
 test('video assistant exposes a knowledge reinforcement action that routes through the classroom skill', () => {
@@ -61,7 +112,7 @@ test('video assistant exposes a knowledge reinforcement action that routes throu
   assert.match(reviewSource, /互动白板/)
   assert.match(componentSource, /async function startKnowledgeReinforcement\(\)/)
   assert.match(courseSource, /prepareOpenMAICClassroom\(\{ video_id: video.id/)
-  assert.match(componentSource, /skillNames:\s*reinforcement \? \['openmaic-classroom'\]/)
+  assert.match(componentSource, /skillNames:\s*reviewTurn \? \['openmaic-classroom'\]/)
   assert.match(template, /<ReviewMaterialReply/)
   assert.doesNotMatch(componentSource, /OPENMAIC_CLASSROOM_RESULT|parseClassroomResult/)
   assert.match(replySource, /setTimeout\(\(\) => void refresh\(turn\), 5000\)/)
@@ -73,6 +124,12 @@ test('video assistant exposes a knowledge reinforcement action that routes throu
   assert.match(reviewSource, /复习材料生成中，进度\$\{progress\}%/)
   assert.match(replySource, /animation: review-shimmer/)
   assert.match(replySource, /fetchOpenMAICClassroomStatus/)
+})
+
+test('video assistant keeps a restored review task ahead of later chat turns', () => {
+  assert.match(componentSource, /saveReviewTaskAnchor\(recoveryStorage,[\s\S]*?messages\.value\.length\)/)
+  assert.match(componentSource, /const reviewFallbackInsertIndex = computed\([\s\S]*?reviewTaskFallbackIndex\(messages\.value, requestId, anchor\)/)
+  assert.match(componentSource, /v-if="reviewFallbackInsertIndex === messageIndex \+ 1" class="assistant-review-reply"/)
 })
 
 test('video assistant disables protected image hydration in native agent display', () => {
@@ -163,8 +220,11 @@ test('video assistant persists and restores the current turn across a hard refre
   assert.match(componentSource, /clearChatRecovery\(recoveryStorage, recoveryKey\)/)
 })
 
-test('video assistant delegates automatic routing to the shared routing rule', () => {
-  assert.match(componentSource, /agentEnabled:\s*reinforcement \|\| settingsStore\.isAgentEnabled,\s*autoRoute:\s*reinforcement \|\| shouldAutoRoute\(settingsStore\.selectedAgentId,\s*settingsStore\.settings\.selectedAgentExplicit\)/)
+test('video assistant routes reinforcement through the Vidsage reasoning agent', () => {
+  assert.match(componentSource, /const reviewTurn = reinforcement \|\| isReviewIntent\(question\)/)
+  assert.match(componentSource, /agentId:\s*reviewTurn \? VIDSAGE_REASONING_AGENT_ID/)
+  assert.match(componentSource, /agentEnabled:\s*reviewTurn \|\| settingsStore\.isAgentEnabled/)
+  assert.match(componentSource, /autoRoute:\s*reviewTurn \? false : shouldAutoRoute\(settingsStore\.selectedAgentId,\s*settingsStore\.settings\.selectedAgentExplicit\)/)
 })
 
 test('video assistant keeps long conversations scrollable inside the viewport', () => {

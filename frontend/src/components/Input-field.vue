@@ -17,7 +17,7 @@ import AgentSelector from './AgentSelector.vue';
 import { getCaretCoordinates } from '@/utils/caret';
 import { getRootZoom, rectToCssPx, cssViewportSize } from '@/utils/zoom';
 import { type ModelConfig } from '@/api/model';
-import { type CustomAgent, BUILTIN_QUICK_ANSWER_ID, BUILTIN_SMART_REASONING_ID } from '@/api/agent';
+import { type CustomAgent, BUILTIN_QUICK_ANSWER_ID, BUILTIN_SMART_REASONING_ID, VIDSAGE_REASONING_AGENT_ID } from '@/api/agent';
 import { useChatResourcesStore } from '@/stores/chatResources';
 import { useEditorResourcesStore } from '@/stores/editorResources';
 import { useI18n } from 'vue-i18n';
@@ -891,8 +891,7 @@ const enabledAgents = computed(() =>
 );
 
 // vidsage 二开：视频场景仅允许选择 builtin-quick-answer 与指定自定义智能体
-const CUSTOM_AGENT_ID = '6f3691c2-8d15-48f8-b1f4-dfadd222ca53';
-const allowedAgentIds = [BUILTIN_QUICK_ANSWER_ID, CUSTOM_AGENT_ID];
+const allowedAgentIds = [BUILTIN_QUICK_ANSWER_ID, VIDSAGE_REASONING_AGENT_ID];
 const allowedAgents = computed(() =>
   enabledAgents.value.filter(a => allowedAgentIds.includes(a.id))
 );

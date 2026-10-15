@@ -11,15 +11,17 @@
       </div>
       <div class="conversation-composer conversation-composer--loading">
         <t-skeleton animation="gradient" :row-col="[{ width: '42%', height: '16px' }, { width: '24%', height: '14px' }]" />
-        <t-skeleton animation="gradient" :row-col="[{ width: '36px', height: '36px', type: 'circle' }]" />
+        <t-skeleton animation="gradient" :row-col="[{ width: '28px', height: '28px', type: 'circle' }]" />
       </div>
     </section>
     <section v-else-if="!activeSession" class="chat-landing">
       <div class="chat-landing__inner">
         <h1>Learn with Vidsage</h1>
+        <ReviewCourseChooser v-if="choosingCourse" class="chat-review-chooser" v-model="selectedCourseId" :courses="courses" :recent-course-ids="recentCourseIds" :loading="loadingCourses"
+          :error="courseError" :busy="preparingClassroom" @confirm="confirmCourse" @cancel="cancelCourse" @retry="loadCourses" />
         <form class="chat-composer" @submit.prevent="startSession">
           <textarea v-model="question" rows="4" placeholder="请输入你的问题" @keydown.enter.exact.prevent="startSession" />
-          <footer>
+          <footer class="chat-composer__controls">
             <div class="chat-composer__tools">
               <VideohubAgentPicker appearance="tool" />
             </div>
@@ -37,7 +39,7 @@
             </div>
           </footer>
         </form>
-        <button class="review-entry" type="button" :disabled="isGenerating || preparingClassroom" @click="openReviewCourse">
+        <button v-if="!choosingCourse" class="review-entry" type="button" :disabled="isGenerating || preparingClassroom" @click="openReviewCourse()">
           <ReviewLearningIcon class="review-entry__icon" />
           <span class="review-entry__copy"><strong>巩固学习</strong><small>根据学习特性，生成专属复习内容</small></span>
         </button>
@@ -46,6 +48,12 @@
     <section v-else class="conversation">
       <header><div><strong>{{ activeSession.title }}</strong></div></header>
       <div ref="messageArea" class="conversation__messages">
+        <article v-if="reviewFallbackInsertIndex === 0" class="message message--assistant">
+          <AssistantReplyShell>
+          <ReviewMaterialReply :request-id="classroomResult?.request_id || ''" :user-id="authStore.user?.id || ''"
+            :initial-task="classroomResult" :video="classroomVideo" @status="updateStatus" />
+          </AssistantReplyShell>
+        </article>
         <template v-for="(message, messageIndex) in activeSession.messages" :key="message.id">
         <article v-if="!isReviewReply(message, messageIndex)" :class="['message', `message--${message.sender}`]">
           <div class="message__bubble">
@@ -100,36 +108,51 @@
             :initial-task="classroomResult" :video="classroomResult?.request_id === reviewRequestId(message.text) ? classroomVideo : null" @status="updateStatus" />
           </AssistantReplyShell>
         </article>
+        <article v-if="reviewFallbackInsertIndex === messageIndex + 1" class="message message--assistant">
+          <AssistantReplyShell>
+          <ReviewMaterialReply :request-id="classroomResult?.request_id || ''" :user-id="authStore.user?.id || ''"
+            :initial-task="classroomResult" :video="classroomVideo" @status="updateStatus" />
+          </AssistantReplyShell>
+        </article>
         </template>
         <ReviewCourseChooser v-if="choosingCourse" v-model="selectedCourseId" :courses="courses" :recent-course-ids="recentCourseIds" :loading="loadingCourses"
           :error="courseError" :busy="preparingClassroom" @confirm="confirmCourse" @cancel="cancelCourse" @retry="loadCourses" />
       </div>
-      <button class="review-entry review-entry--conversation" type="button" :disabled="isGenerating || preparingClassroom" @click="openReviewCourse()">
+      <button class="review-entry review-entry--conversation" type="button" :disabled="isGenerating || preparingClassroom" @click="openReviewCourseInConversation()">
         <span class="review-entry__copy"><strong>巩固知识</strong></span>
       </button>
       <form class="conversation-composer" @submit.prevent="continueSession">
         <div class="conversation-composer__body">
-          <textarea v-model="followUp" rows="2" placeholder="请输入你的问题" @keydown.enter.exact.prevent="continueSession" />
+          <textarea
+            ref="followUpInput"
+            v-model="followUp"
+            rows="1"
+            placeholder="请输入你的问题"
+            @input="resizeFollowUpInput"
+            @keydown.enter.exact.prevent="continueSession"
+          />
+        </div>
+        <div class="conversation-composer__controls">
           <div class="conversation-composer__tools">
             <VideohubAgentPicker appearance="tool" />
           </div>
-        </div>
-        <div class="chat-actions">
-          <t-tooltip content="语音输入" placement="top">
-            <t-button class="chat-voice" type="button" shape="square" aria-label="语音输入" @click="showToolMessage('语音输入')">
-              <svg class="chat-voice__icon" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
-                <path d="M486.4 972.8v-128.9728A332.8 332.8 0 0 1 179.2 512a25.6 25.6 0 0 1 51.2 0 281.6 281.6 0 0 0 563.2 0 25.6 25.6 0 1 1 51.2 0 332.8 332.8 0 0 1-307.2 331.8272V972.8h153.6a25.6 25.6 0 1 1 0 51.2h-358.4a25.6 25.6 0 1 1 0-51.2h153.6zM512 51.2a153.6 153.6 0 0 0-153.6 153.6v307.2a153.6 153.6 0 0 0 307.2 0V204.8a153.6 153.6 0 0 0-153.6-153.6z m0-51.2a204.8 204.8 0 0 1 204.8 204.8v307.2a204.8 204.8 0 1 1-409.6 0V204.8a204.8 204.8 0 0 1 204.8-204.8z" fill="currentColor" />
-              </svg>
+          <div class="chat-actions">
+            <t-tooltip content="语音输入" placement="top">
+              <t-button class="chat-voice" type="button" shape="square" aria-label="语音输入" @click="showToolMessage('语音输入')">
+                <svg class="chat-voice__icon" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false">
+                  <path d="M486.4 972.8v-128.9728A332.8 332.8 0 0 1 179.2 512a25.6 25.6 0 0 1 51.2 0 281.6 281.6 0 0 0 563.2 0 25.6 25.6 0 1 1 51.2 0 332.8 332.8 0 0 1-307.2 331.8272V972.8h153.6a25.6 25.6 0 1 1 0-51.2h-358.4a25.6 25.6 0 1 1 0-51.2h153.6zM512 51.2a153.6 153.6 0 0 0-153.6 153.6v307.2a153.6 153.6 0 0 0 307.2 0V204.8a153.6 153.6 0 0 0-153.6-153.6z m0-51.2a204.8 204.8 0 0 1 204.8 204.8v307.2a204.8 204.8 0 1 1-409.6 0V204.8a204.8 204.8 0 0 1 204.8-204.8z" fill="currentColor" />
+                </svg>
+              </t-button>
+            </t-tooltip>
+            <t-tooltip v-if="isGenerating || canPauseReview" content="暂停生成" placement="top">
+              <t-button class="chat-send chat-pause" type="button" shape="square" :disabled="cancellingClassroom" aria-label="暂停生成" @click="pauseGeneration">
+                <t-icon name="pause-circle" />
+              </t-button>
+            </t-tooltip>
+            <t-button v-else class="chat-send" type="submit" shape="square" aria-label="发送" :disabled="!followUp.trim()">
+              <t-icon name="arrow-up" />
             </t-button>
-          </t-tooltip>
-          <t-tooltip v-if="isGenerating" content="暂停生成" placement="top">
-            <t-button class="chat-send chat-pause" type="button" shape="square" aria-label="暂停生成" @click="pauseGeneration">
-              <t-icon name="pause-circle" />
-            </t-button>
-          </t-tooltip>
-          <t-button v-else class="chat-send" type="submit" shape="square" aria-label="发送" :disabled="!followUp.trim()">
-            <t-icon name="arrow-up" />
-          </t-button>
+          </div>
         </div>
       </form>
     </section>
@@ -140,7 +163,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { createChatTurn, createReviewChatSession, fetchSessions, loadChatSession } from '@/api/videohub/chat'
+import { createChatTurn, fetchSessions, loadChatSession } from '@/api/videohub/chat'
 import type { StreamingChatMessage } from '@/api/videohub/chat'
 import type { ChatMessage, ChatSession } from '@/types/videohub'
 import AgentStreamDisplay from '@/views/chat/components/AgentStreamDisplay.vue'
@@ -150,7 +173,8 @@ import { currentChatMessageTime, formatChatMessageTime, reviewReplyTime } from '
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
 import { useReviewCourse } from '@/composables/useReviewCourse'
-import { isFirstReviewRequest, isReviewIntent, reviewRequestId, visibleReviewQuestion } from '@/api/videohub/reviewMaterials'
+import { isFirstReviewRequest, isReviewIntent, needsReviewCourseChoice, readReviewTaskAnchor, reviewRequestId, reviewTaskFallbackIndex, saveReviewTaskAnchor, visibleReviewQuestion } from '@/api/videohub/reviewMaterials'
+import { VIDSAGE_REASONING_AGENT_ID } from '@/api/agent'
 import ReviewMaterialReply from '@/components/videohub/ReviewMaterialReply.vue'
 import ReviewCourseChooser from '@/components/videohub/ReviewCourseChooser.vue'
 import ReviewLearningIcon from '@/components/videohub/ReviewLearningIcon.vue'
@@ -171,12 +195,18 @@ const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
 const question = ref(''), followUp = ref(''), sessions = ref<ChatSession[]>([]), activeSession = ref<ChatSession | null>(null)
 const loadingSessions = ref(true), isGenerating = ref(false), messageArea = ref<HTMLElement | null>(null)
+const followUpInput = ref<HTMLTextAreaElement | null>(null)
+const followUpMaxHeight = 124
 const conversationLoading = ref(Boolean(route.query.session))
 const streamingAssistantId = ref('')
 const stopCurrentTurn = ref<null | (() => Promise<void>)>(null)
+const activeReviewRequestId = ref('')
+let pauseRequested = false
 let turnRevision = 0
 function leaveCurrentTurn() {
   turnRevision += 1
+  activeReviewRequestId.value = ''
+  pauseRequested = false
   void stopCurrentTurn.value?.()
   stopCurrentTurn.value = null
   isGenerating.value = false
@@ -188,6 +218,7 @@ const editingMessageId = ref('')
 const editingMessageText = ref('')
 const sessionListReady = ref(false)
 const recoveryStorage = getChatRecoveryStorage()
+const reviewAnchorRevision = ref(0)
 const conversationSkeletonRows = [
   { id: 'user-1', align: 'user', rows: [{ width: '100%', height: '36px', type: 'rect' }] },
   { id: 'assistant-1', align: 'assistant', rows: [{ width: '78%', height: '16px' }, { width: '100%', height: '16px' }, { width: '56%', height: '16px' }] },
@@ -201,44 +232,53 @@ const streamingAssistantVisible = computed(() => Boolean(streamingAssistantId.va
 })))
 
 async function scrollBottom() { await nextTick(); if (messageArea.value) messageArea.value.scrollTop = messageArea.value.scrollHeight }
+function resizeFollowUpInput() {
+  const textarea = followUpInput.value
+  if (!textarea) return
+  textarea.style.height = 'auto'
+  const height = Math.min(textarea.scrollHeight, followUpMaxHeight)
+  textarea.style.height = `${height}px`
+  textarea.style.overflowY = textarea.scrollHeight > followUpMaxHeight ? 'auto' : 'hidden'
+}
+watch(followUp, () => { void nextTick(resizeFollowUpInput) })
 const sessionQueryId = computed(() => {
   const value = route.query.session
   return typeof value === 'string' ? value : ''
 })
 const { choosingCourse, loadingCourses, courseError, courses, selectedCourseId, preparingClassroom,
-  classroomResult, classroomVideo, recentCourseIds, askCourse, loadCourses, cancelCourse, confirmCourse, updateStatus } = useReviewCourse({
+  classroomResult, classroomVideo, recentCourseIds, cancellingClassroom, cancelReview, askCourse, loadCourses, cancelCourse, confirmCourse, updateStatus } = useReviewCourse({
   userId: computed(() => authStore.user?.id || ''),
   storageKey: computed(() => `openmaic:${authStore.user?.id || ''}:chat`),
   contextKey: computed(() => activeSession.value?.id || ''),
   busy: isGenerating,
   onStart: async instruction => {
+    const requestId = reviewRequestId(instruction)
+    saveReviewTaskAnchor(recoveryStorage, authStore.user?.id || '', requestId, activeSession.value?.messages.length || 0)
+    reviewAnchorRevision.value += 1
     if (activeSession.value) { followUp.value = instruction; await continueSession() }
     else { question.value = instruction; await startSession() }
   },
 })
+const canPauseReview = computed(() => Boolean(activeReviewRequestId.value
+  && classroomResult.value?.request_id === activeReviewRequestId.value
+  && ['queued', 'submitting', 'running'].includes(classroomResult.value.generation_status)))
+const reviewFallbackInsertIndex = computed(() => {
+  void reviewAnchorRevision.value
+  const requestId = classroomResult.value?.request_id || ''
+  const messages = activeSession.value?.messages || []
+  const anchor = readReviewTaskAnchor(recoveryStorage, authStore.user?.id || '', requestId, 0)
+  return reviewTaskFallbackIndex(messages, requestId, anchor)
+})
 function isReviewReply(message: ChatMessage, index: number) {
   return message.sender === 'assistant' && !message.id.startsWith('error-') && Boolean(reviewRequestId(questionForMessage(index)))
 }
-const openingReviewCourse = ref(false)
 async function openReviewCourse() {
-  if (openingReviewCourse.value || isGenerating.value || preparingClassroom.value) return
-  openingReviewCourse.value = true
-  try {
-    const session = await createReviewChatSession()
-    leaveCurrentTurn()
-    cancelMessageEdit()
-    question.value = ''
-    followUp.value = ''
-    sessions.value.unshift(session)
-    activeSession.value = session
-    await router.push({ path: '/platform/ai-chat', query: { session: session.id } })
-    await nextTick()
-    await askCourse()
-    await scrollBottom()
-    window.dispatchEvent(new CustomEvent('weknora:session-refresh'))
-  } catch {
-    MessagePlugin.error('新对话创建失败，请重试')
-  } finally { openingReviewCourse.value = false }
+  await askCourse()
+}
+async function openReviewCourseInConversation() {
+  if (!activeSession.value || isGenerating.value || preparingClassroom.value) return
+  await askCourse()
+  await scrollBottom()
 }
 function toNativeAgentSession(message: ChatMessage) {
   const item = message as RenderableChatMessage
@@ -299,11 +339,15 @@ function showToolMessage(label: string) {
   MessagePlugin.info(`${label}入口暂未接入`)
 }
 
-function pauseGeneration() {
+async function pauseGeneration() {
+  if (cancellingClassroom.value) return
+  const requestId = activeReviewRequestId.value
+  const revision = turnRevision
+  pauseRequested = true
   const stop = stopCurrentTurn.value
-  if (!stop) return
   stopCurrentTurn.value = null
-  void stop()
+  if (stop) void stop().catch(() => { /* Task cancellation still proceeds if chat stop fails. */ })
+  if (requestId && await cancelReview(requestId) && revision === turnRevision) activeReviewRequestId.value = ''
 }
 
 function startMessageEdit(message: ChatMessage) {
@@ -363,9 +407,13 @@ function appendRecoveredQuestion(session: ChatSession, questionText: string): Ch
 }
 async function startSession() {
   const value = question.value.trim(); if (!value || isGenerating.value) return
-  if (isReviewIntent(value)) { question.value = ''; await openReviewCourse(); return }
+  if (cancellingClassroom.value) return
+  if (needsReviewCourseChoice(value)) { question.value = ''; await openReviewCourse(); return }
   const reinforcement = Boolean(reviewRequestId(value))
-  if (!reinforcement && preparingClassroom.value) return
+  const reviewTurn = reinforcement || isReviewIntent(value)
+  activeReviewRequestId.value = reviewRequestId(value)
+  pauseRequested = false
+  if (!reviewTurn && preparingClassroom.value) return
   const revision = turnRevision
   lastUserQuery.value = value
   persistPendingQuestion(value)
@@ -378,14 +426,14 @@ async function startSession() {
     const created = await createChatTurn(value, {
       assistantTimestamp: session.messages.find(message => message.id === assistantId)?.timestamp,
       globalMode: true,
-      agentId: reinforcement ? undefined : settingsStore.selectedAgentId,
-      agentEnabled: reinforcement || settingsStore.isAgentEnabled,
-      autoRoute: reinforcement || shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
-      agentSourceTenantId: reinforcement ? undefined : settingsStore.selectedAgentSourceTenantId,
-      skillNames: reinforcement ? ['openmaic-classroom'] : undefined,
+      agentId: reviewTurn ? VIDSAGE_REASONING_AGENT_ID : settingsStore.selectedAgentId,
+      agentEnabled: reviewTurn || settingsStore.isAgentEnabled,
+      autoRoute: reviewTurn ? false : shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
+      agentSourceTenantId: reviewTurn ? undefined : settingsStore.selectedAgentSourceTenantId,
+      skillNames: reviewTurn ? ['openmaic-classroom'] : undefined,
       onSessionCreated: createdSession => { if (revision === turnRevision) materializePendingSession(session, createdSession) },
       onStreamMessage: message => { if (revision === turnRevision) updateStreamingMessage(assistantId, message) },
-      onStopReady: stop => { if (revision === turnRevision) stopCurrentTurn.value = stop; else void stop() },
+      onStopReady: stop => { if (revision === turnRevision && !pauseRequested) stopCurrentTurn.value = stop; else void stop() },
     })
     if (revision !== turnRevision) return
     sessions.value = sessions.value.map(item => item.id === session.id || item.id === created.id ? created : item)
@@ -403,9 +451,13 @@ async function startSession() {
 }
 async function continueSession() {
   const value = followUp.value.trim(); if (!value || isGenerating.value || !activeSession.value) return
-  if (isReviewIntent(value)) { followUp.value = ''; await askCourse(); await scrollBottom(); return }
+  if (cancellingClassroom.value) return
+  if (needsReviewCourseChoice(value)) { followUp.value = ''; await askCourse(); await scrollBottom(); return }
   const reinforcement = Boolean(reviewRequestId(value))
-  if (!reinforcement && preparingClassroom.value) return
+  const reviewTurn = reinforcement || isReviewIntent(value)
+  activeReviewRequestId.value = reviewRequestId(value)
+  pauseRequested = false
+  if (!reviewTurn && preparingClassroom.value) return
   const revision = turnRevision
   const target = activeSession.value
   lastUserQuery.value = value
@@ -417,16 +469,16 @@ async function continueSession() {
   try {
     const updated = await createChatTurn(value, {
       assistantTimestamp: target.messages.find(message => message.id === assistantId)?.timestamp,
-      globalMode: reinforcement || target.scope !== 'video',
-      agentId: reinforcement ? undefined : settingsStore.selectedAgentId,
-      agentEnabled: reinforcement || settingsStore.isAgentEnabled,
-      autoRoute: reinforcement || shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
-      agentSourceTenantId: reinforcement ? undefined : settingsStore.selectedAgentSourceTenantId,
-      skillNames: reinforcement ? ['openmaic-classroom'] : undefined,
-      currentVideo: !reinforcement && target.videoId ? { id: target.videoId, title: target.videoTitle || '指定视频', category: 'general', categoryName: '通用分享', duration: '', durationSeconds: 0, created_at: '', video_url: '', poster_url: target.videoCoverUrl, overview: '', chapters: [], subtitles: [] } : undefined,
+      globalMode: reviewTurn || target.scope !== 'video',
+      agentId: reviewTurn ? VIDSAGE_REASONING_AGENT_ID : settingsStore.selectedAgentId,
+      agentEnabled: reviewTurn || settingsStore.isAgentEnabled,
+      autoRoute: reviewTurn ? false : shouldAutoRoute(settingsStore.selectedAgentId, settingsStore.settings.selectedAgentExplicit),
+      agentSourceTenantId: reviewTurn ? undefined : settingsStore.selectedAgentSourceTenantId,
+      skillNames: reviewTurn ? ['openmaic-classroom'] : undefined,
+      currentVideo: !reviewTurn && target.videoId ? { id: target.videoId, title: target.videoTitle || '指定视频', category: 'general', categoryName: '通用分享', duration: '', durationSeconds: 0, created_at: '', video_url: '', poster_url: target.videoCoverUrl, overview: '', chapters: [], subtitles: [] } : undefined,
       session: target,
       onStreamMessage: message => { if (revision === turnRevision) updateStreamingMessage(assistantId, message) },
-      onStopReady: stop => { if (revision === turnRevision) stopCurrentTurn.value = stop; else void stop() },
+      onStopReady: stop => { if (revision === turnRevision && !pauseRequested) stopCurrentTurn.value = stop; else void stop() },
     })
     if (revision !== turnRevision) return
     const completed = reinforcement ? {
@@ -572,7 +624,7 @@ onMounted(async () => {
   height: 100%;
   overflow: hidden;
   scrollbar-width: none;
-  padding: 28px 48px 38px;
+  padding: 16px 48px 20px;
   color: var(--td-text-color-primary);
   background:
     linear-gradient(120deg, rgba(232, 237, 234, .96), rgba(248, 249, 248, .94) 46%, rgba(235, 240, 237, .96));
@@ -630,9 +682,14 @@ onMounted(async () => {
 }
 
 .chat-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
+  padding: 12px 14px 12px 20px;
   overflow: hidden;
   border: 1px solid rgba(255,255,255,.84);
   border-radius: var(--td-radius-extraLarge);
@@ -643,8 +700,7 @@ onMounted(async () => {
   transition: border-color .2s ease, box-shadow .2s ease;
 }
 
-.chat-composer:focus-within,
-.conversation-composer:focus-within {
+.chat-composer:focus-within {
   border-color: color-mix(in srgb, var(--td-brand-color) 42%, transparent);
   box-shadow: 0 18px 44px rgba(27,37,31,.12), 0 0 0 3px color-mix(in srgb, var(--td-brand-color) 12%, transparent);
 }
@@ -655,7 +711,7 @@ onMounted(async () => {
   width: 100%;
   min-height: 128px;
   resize: none;
-  padding: 20px 20px 10px;
+  padding: 8px 0;
   border: 0;
   outline: 0;
   background: transparent;
@@ -676,7 +732,7 @@ onMounted(async () => {
   color: var(--td-text-color-placeholder);
 }
 
-.review-entry { display: flex; width: min(320px, 100%); min-height: 84px; margin-top: 16px; align-items: center; gap: 15px; padding: 18px 20px; border: 1px solid rgba(255,255,255,.9); border-radius: 12px; background: rgba(255,255,255,.42); backdrop-filter: blur(26px) saturate(112%); color: var(--td-text-color-primary); cursor: pointer; text-align: left; transition: background .2s ease, box-shadow .2s ease; }
+.review-entry { display: flex; width: min(320px, 100%); min-height: 84px; margin-top: 16px; align-items: center; gap: 14px; padding: 10px 12px; border: 1px solid rgba(255,255,255,.9); border-radius: 12px; background: rgba(255,255,255,.42); backdrop-filter: blur(26px) saturate(112%); color: var(--td-text-color-primary); cursor: pointer; text-align: left; transition: background .2s ease, box-shadow .2s ease; }
 .review-entry:hover:not(:disabled) { background: rgba(255,255,255,.58); box-shadow: 0 4px 16px rgba(0,0,0,.06); }
 .review-entry:focus-visible { outline: 2px solid var(--td-brand-color); outline-offset: 3px; }
 .review-entry__icon { width: 38px; height: 38px; flex: 0 0 auto; color: #f0b070; }
@@ -691,11 +747,13 @@ onMounted(async () => {
 .review-entry:disabled { cursor: not-allowed; opacity: .5; }
 
 
-.chat-composer footer {
+.chat-composer__controls,
+.conversation-composer__controls {
   display: flex;
+  align-self: end;
   align-items: center;
-  justify-content: space-between;
-  padding: 7px 12px 12px 16px;
+  gap: 4px;
+  min-width: 0;
 }
 
 .chat-composer__tools,
@@ -712,18 +770,27 @@ onMounted(async () => {
   flex: 0 0 auto;
 }
 
+.chat-composer__tools :deep(.picker-chip__label),
+.conversation-composer__tools :deep(.picker-chip__label) {
+  max-width: clamp(56px, 18vw, 120px);
+}
+
 .chat-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .chat-send,
 .chat-voice {
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  padding: 0;
+  border: 0;
   border-radius: var(--td-radius-large);
+  transition: background-color 150ms ease, box-shadow 150ms ease, color 150ms ease, transform 150ms ease;
 }
 
 .chat-send {
@@ -737,25 +804,34 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   color: var(--td-text-color-secondary);
-  border: 1px solid var(--td-component-stroke);
   background: transparent;
   box-shadow: none;
 }
 
+.chat-actions :deep(svg) {
+  width: 16px;
+  height: 16px;
+}
+
 .chat-voice__icon {
-  width: 18px;
-  height: 18px;
   display: block;
 }
 
-.chat-send:hover {
+.chat-send:not(:disabled):hover,
+.chat-send:not(:disabled):focus-visible {
+  border: 0;
   background: var(--td-brand-color-active);
+  box-shadow: 0 0 0 3px var(--td-brand-color-light), 0 8px 16px rgba(7,192,95,.28);
+  transform: translateY(-1px);
 }
 
-.chat-voice:hover {
-  border-color: var(--td-component-stroke-hover);
-  background: var(--td-bg-color-secondarycontainer);
-  color: var(--td-text-color-primary);
+.chat-voice:hover,
+.chat-voice:focus-visible {
+  border: 0;
+  background: var(--td-brand-color-light);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--td-brand-color) 16%, transparent);
+  color: var(--td-brand-color);
+  transform: translateY(-1px);
 }
 
 .chat-send:disabled {
@@ -767,10 +843,10 @@ onMounted(async () => {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   box-sizing: border-box;
-  height: calc(100% - 4px);
+  height: 100%;
   min-height: 0;
   overflow: hidden;
-  padding: 0 0 8px;
+  padding: 0;
 }
 
 .conversation > header {
@@ -778,7 +854,7 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
   min-width: 0;
-  padding-bottom: 10px;
+  padding-bottom: 8px;
   border-bottom: 1px solid rgba(0,0,0,.08);
 }
 
@@ -846,7 +922,7 @@ onMounted(async () => {
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-  padding: 16px 0 24px;
+  padding: 12px 0 16px;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
@@ -863,9 +939,14 @@ onMounted(async () => {
   border: 1px solid rgba(255,255,255,.84);
   border-radius: var(--td-radius-extraLarge);
   background: rgba(255,255,255,.62);
-  box-shadow: 0 12px 32px rgba(27,37,31,.08);
+  box-shadow: 0 4px 14px rgba(27,37,31,.06);
   backdrop-filter: blur(24px) saturate(112%);
   -webkit-backdrop-filter: blur(24px) saturate(112%);
+}
+
+.conversation-composer:focus-within {
+  border-color: color-mix(in srgb, var(--td-brand-color) 42%, transparent);
+  box-shadow: 0 4px 16px rgba(27,37,31,.08), 0 0 0 3px color-mix(in srgb, var(--td-brand-color) 12%, transparent);
 }
 
 .conversation-composer__body {
@@ -880,7 +961,7 @@ onMounted(async () => {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  min-height: 56px;
+  max-height: 124px;
   resize: none;
   padding: 4px 0 10px;
   border: 0;
@@ -889,6 +970,7 @@ onMounted(async () => {
   color: var(--td-text-color-primary);
   font: inherit;
   line-height: 1.6;
+  overflow-y: hidden;
   overflow-wrap: anywhere;
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -963,22 +1045,18 @@ onMounted(async () => {
 .generating { display: flex; align-items: center; gap: 8px; color: var(--td-text-color-secondary); }
 
 @media (max-width: 900px) {
-  .chat-page { padding: 24px; }
+  .chat-page { padding: 16px 24px 20px; }
   .chat-landing { transform: translateY(-2vh); }
 }
 
 @media (max-width: 640px) {
-  .chat-page { padding: 20px 16px; }
+  .chat-page { padding: 12px 16px 16px; }
   .chat-landing h1 { margin-bottom: 26px; font-size: 31px; }
   .message__bubble { max-width: 88%; }
   .message--assistant .message__bubble { max-width: none; }
   .conversation-composer {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 4px;
+    gap: 6px;
     padding: 12px;
-  }
-  .conversation-composer .chat-actions {
-    justify-content: flex-end;
   }
 }
 </style>

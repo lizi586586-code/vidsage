@@ -34,6 +34,7 @@ const presentation = computed(() => inaccessible.value
   : reviewCardPresentation(task.value))
 let timer: ReturnType<typeof setTimeout> | undefined
 let revision = 0
+let pollRevision = 0
 let disposed = false
 onUnmounted(() => { disposed = true; revision += 1; if (timer) clearTimeout(timer) })
 
@@ -54,23 +55,33 @@ watch(() => [props.requestId, props.userId], async () => {
     if (!disposed && turn === revision && !videoTitle.value) videoTitle.value = '课程名称暂不可用'
   })
   else videoTitle.value = '课程名称暂不可用'
-  await refresh(turn)
+  if (!task.value || isReviewPending(task.value)) await refresh(turn)
 }, { immediate: true })
 
+watch(() => props.initialTask, status => {
+  if (!status || status.request_id !== props.requestId || task.value?.generation_status === 'cancelled') return
+  task.value = status
+  if (!isReviewPending(status)) {
+    pollRevision += 1 // Invalidate an older in-flight poll without dropping the course title.
+    if (timer) clearTimeout(timer)
+  }
+}, { flush: 'sync' })
+
 async function refresh(turn: number) {
+  const poll = pollRevision
   try {
     const status = await fetchOpenMAICClassroomStatus(props.requestId)
-    if (disposed || turn !== revision) return
+    if (disposed || turn !== revision || poll !== pollRevision) return
     task.value = status
     emit('status', status)
   } catch (error) {
-    if (disposed || turn !== revision) return
+    if (disposed || turn !== revision || poll !== pollRevision) return
     const status = (error as { status?: number; response?: { status?: number } })?.status
       || (error as { response?: { status?: number } })?.response?.status
     if (status === 401 || status === 403 || status === 404) inaccessible.value = true
     // A transient network error does not replace a verified result.
   }
-  if (!disposed && turn === revision && !inaccessible.value && (!task.value || isReviewPending(task.value))) {
+  if (!disposed && turn === revision && poll === pollRevision && !inaccessible.value && (!task.value || isReviewPending(task.value))) {
     timer = setTimeout(() => void refresh(turn), 5000)
   }
 }
@@ -93,9 +104,9 @@ async function refresh(turn: number) {
 .review-card__document::before { content: ''; position: absolute; inset: 4px 8px; transform: rotate(10deg); background: color-mix(in srgb, var(--td-brand-color) 10%, transparent); border-radius: var(--td-radius-large); }
 .review-card__document svg { position: relative; width: 48px; height: 48px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
 .review-card[data-state=running]::after, .review-card[data-state=unknown]::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(100deg, transparent 15%, color-mix(in srgb, var(--td-bg-color-container) 72%, transparent) 50%, transparent 85%); animation: review-shimmer 1.8s ease-in-out infinite; transform: translateX(-100%); }
-.review-card[data-state=failed] { background: var(--td-bg-color-secondarycontainer); }
-.review-card[data-state=failed] .review-card__document { color: var(--td-text-color-placeholder); }
-.review-card[data-state=failed] .review-card__document::before { background: color-mix(in srgb, var(--td-component-stroke) 60%, transparent); }
+.review-card[data-state=failed], .review-card[data-state=cancelled] { background: var(--td-bg-color-secondarycontainer); }
+.review-card[data-state=failed] .review-card__document, .review-card[data-state=cancelled] .review-card__document { color: var(--td-text-color-placeholder); }
+.review-card[data-state=failed] .review-card__document::before, .review-card[data-state=cancelled] .review-card__document::before { background: color-mix(in srgb, var(--td-component-stroke) 60%, transparent); }
 a.review-card:hover, a.review-card:focus-visible { border-color: var(--td-brand-color); outline-color: var(--td-brand-color); }
 @keyframes review-shimmer { to { transform: translateX(100%); } }
 @media (max-width: 440px) { .review-card__head { padding: 16px; } .review-card__document { width: 48px; } }

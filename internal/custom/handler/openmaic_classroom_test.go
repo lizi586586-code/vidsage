@@ -3,9 +3,11 @@ package handler
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,6 +56,7 @@ func classroomTest(t *testing.T) (*gorm.DB, *OpenMAICClassroomHandler, *gin.Engi
 	router := gin.New()
 	router.POST("/prepare", h.Prepare)
 	router.POST("/:requestID/claim", h.Claim)
+	router.POST("/:requestID/cancel", h.Cancel)
 	router.POST("/sync", h.SyncStatus)
 	router.GET("/status/:classroomID", h.Status)
 	router.GET("/pending", h.Pending)
@@ -73,6 +76,138 @@ func classroomRow(t *testing.T, db *gorm.DB, request, learner string) model.Open
 	require.NoError(t, db.Create(&row).Error)
 	return row
 }
+func TestOpenMAICCancelContract(t *testing.T) {
+	for _, state := range []string{"queued", "submitting", "running", "succeeded", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			db, h, router := classroomTest(t)
+			row := classroomRow(t, db, "cancel-me", "learner-1")
+			require.NoError(t, db.Model(&row).Update("generation_status", state).Error)
+			h.contexts[row.RequestID] = classroomContext{Expires: time.Now().Add(time.Minute)}
+			for i := 0; i < 2; i++ {
+				rec := classroomRequest(router, "POST", "/cancel-me/cancel", "{}", "user-token")
+				if state == "succeeded" || state == "failed" {
+					require.Equal(t, 409, rec.Code)
+					require.Contains(t, rec.Body.String(), "task_not_cancellable")
+				} else {
+					require.Equal(t, 200, rec.Code, rec.Body.String())
+					require.Contains(t, rec.Body.String(), `"generation_status":"cancelled"`)
+					require.Contains(t, rec.Body.String(), `"last_error_code":"user_cancelled"`)
+				}
+			}
+			require.NoError(t, db.First(&row, "id = ?", row.ID).Error)
+			if state == "succeeded" || state == "failed" {
+				require.Equal(t, state, row.GenerationStatus)
+				return
+			}
+			require.NotContains(t, h.contexts, row.RequestID)
+			require.Equal(t, 410, classroomRequest(router, "POST", "/cancel-me/claim", "{}", "bridge-secret").Code)
+			require.NotContains(t, classroomRequest(router, "GET", "/pending", "", "bridge-secret").Body.String(), "cancel-me")
+			require.Contains(t, classroomRequest(router, "GET", "/status/cancel-me", "", "user-token").Body.String(), `"generation_status":"cancelled"`)
+		})
+	}
+}
+
+func TestOpenMAICCancelRejectsInvalidRequests(t *testing.T) {
+	db, _, router := classroomTest(t)
+	classroomRow(t, db, "own", "learner-1")
+	classroomRow(t, db, "other", "learner-2")
+	for _, body := range []string{"", "null", "[]", `{"extra":1}`, "{", "{} {}", "{} trailing", "true"} {
+		rec := classroomRequest(router, "POST", "/own/cancel", body, "user-token")
+		require.Equal(t, 400, rec.Code, body)
+		require.Contains(t, rec.Body.String(), "invalid_request")
+	}
+	for _, id := range []string{"other", "missing"} {
+		rec := classroomRequest(router, "POST", "/"+id+"/cancel", "{}", "user-token")
+		require.Equal(t, 404, rec.Code)
+		require.Contains(t, rec.Body.String(), "classroom_not_found")
+	}
+	require.Equal(t, 401, classroomRequest(router, "POST", "/own/cancel", "{}", "bridge-secret").Code)
+	var row model.OpenMAICClassroom
+	require.NoError(t, db.Where("request_id = ?", "own").First(&row).Error)
+	require.Equal(t, "queued", row.GenerationStatus)
+}
+
+func TestOpenMAICCancelledTaskIgnoresEveryLateUpdate(t *testing.T) {
+	db, _, router := classroomTest(t)
+	row := classroomRow(t, db, "late", "learner-1")
+	require.Equal(t, 200, classroomRequest(router, "POST", "/late/cancel", "{}", "user-token").Code)
+	for _, state := range []string{"running", "succeeded", "failed"} {
+		body := `{"request_id":"late","external_learner_id":"learner-1","job_id":"job-late","generation_status":"` + state + `","progress":100,"classroom_id":"late-class","classroom_url":"https://open.maic.chat/classroom/late-class","status":"unknown"}`
+		rec := classroomRequest(router, "POST", "/sync", body, "bridge-secret")
+		require.Equal(t, 200, rec.Code, rec.Body.String())
+		require.NoError(t, db.First(&row, "id = ?", row.ID).Error)
+		require.Equal(t, "cancelled", row.GenerationStatus)
+		require.Equal(t, "user_cancelled", row.LastErrorCode)
+		require.Empty(t, row.ClassroomURL)
+		require.Empty(t, row.ClassroomID)
+		require.Nil(t, row.Progress)
+	}
+}
+
+func TestOpenMAICCancelFailureKeepsTaskAndClaimContext(t *testing.T) {
+	db, h, router := classroomTest(t)
+	row := classroomRow(t, db, "rollback", "learner-1")
+	h.contexts[row.RequestID] = classroomContext{Expires: time.Now().Add(time.Minute)}
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("cancel_failure", func(tx *gorm.DB) {
+		tx.AddError(errors.New("simulated write failure"))
+	}))
+	rec := classroomRequest(router, "POST", "/rollback/cancel", "{}", "user-token")
+	require.Equal(t, 500, rec.Code)
+	require.Contains(t, rec.Body.String(), "cancel_request_failed")
+	require.NotContains(t, rec.Body.String(), "simulated write failure")
+	require.Contains(t, h.contexts, row.RequestID)
+	require.NoError(t, db.First(&row, "id = ?", row.ID).Error)
+	require.Equal(t, "queued", row.GenerationStatus)
+	require.NoError(t, db.Callback().Update().Remove("cancel_failure"))
+	require.Equal(t, 200, classroomRequest(router, "POST", "/rollback/claim", "{}", "bridge-secret").Code)
+}
+
+func TestOpenMAICCancelRacesWithClaimAndCompletion(t *testing.T) {
+	for _, competing := range []string{"claim", "sync"} {
+		t.Run(competing, func(t *testing.T) {
+			db, h, router := classroomTest(t)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			sqlDB.SetMaxOpenConns(1) // SQLite serializes writes; production uses row locks.
+			row := classroomRow(t, db, "race", "learner-1")
+			h.contexts["race"] = classroomContext{Expires: time.Now().Add(time.Minute)}
+			var cancel, competitor *httptest.ResponseRecorder
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				<-start
+				cancel = classroomRequest(router, "POST", "/race/cancel", "{}", "user-token")
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				if competing == "claim" {
+					competitor = classroomRequest(router, "POST", "/race/claim", "{}", "bridge-secret")
+					return
+				}
+				competitor = classroomRequest(router, "POST", "/sync", `{"request_id":"race","generation_status":"succeeded","classroom_id":"race-class","classroom_url":"https://open.maic.chat/classroom/race-class","status":"unknown"}`, "bridge-secret")
+			}()
+			close(start)
+			wg.Wait()
+			require.NoError(t, db.First(&row, "id = ?", row.ID).Error)
+			if row.GenerationStatus == "cancelled" {
+				require.Equal(t, 200, cancel.Code)
+				require.Empty(t, row.ClassroomURL)
+			} else {
+				require.Equal(t, "succeeded", row.GenerationStatus)
+				require.Equal(t, 409, cancel.Code)
+			}
+			if competing == "sync" {
+				require.Equal(t, 200, competitor.Code)
+			} else {
+				require.Contains(t, []int{200, 410}, competitor.Code)
+			}
+		})
+	}
+}
+
 func TestOpenMAICPreparedInputsUseOriginalPDFAndOwnActivePreferences(t *testing.T) {
 	db, _, router := classroomTest(t)
 	prepared := classroomRequest(router, "POST", "/prepare", `{"knowledge_ids":["pdf-1"],"requirement":"互动白板"}`, "user-token")

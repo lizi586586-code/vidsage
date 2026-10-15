@@ -1,7 +1,7 @@
 import { computed, onUnmounted, ref, watch, type Ref } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { fetchVideoList, isVideoInitiallyAvailable } from '@/api/videohub'
-import { fetchOpenMAICClassroomStatus, prepareOpenMAICClassroom, type OpenMAICClassroomStatus } from '@/api/videohub/openmaicClassroom'
+import { cancelOpenMAICClassroom, fetchOpenMAICClassroomStatus, prepareOpenMAICClassroom, type OpenMAICClassroomStatus } from '@/api/videohub/openmaicClassroom'
 import { isReviewPending, reviewInstruction, reviewRequirement, reviewSourceKey } from '@/api/videohub/reviewMaterials'
 import { readRecentlyPlayedCourseIds } from '@/api/videohub/recentlyPlayedCourses'
 import type { VideoData } from '@/types/videohub'
@@ -22,9 +22,12 @@ export function useReviewCourse(options: {
   const preparingClassroom = ref(false)
   const classroomResult = ref<OpenMAICClassroomStatus | null>(null)
   const classroomVideo = ref<VideoData | null>(null)
+  const cancellingClassroom = ref(false)
   const classroomGenerating = computed(() => isReviewPending(classroomResult.value))
   let revision = 0
   let disposed = false
+  const cancelledResults = new Map<string, OpenMAICClassroomStatus>()
+  const pendingCancellations = new Set<string>()
   function isMissingTask(error: unknown) {
     const response = error as { status?: number; response?: { status?: number } }
     return (response?.status || response?.response?.status) === 404
@@ -41,6 +44,7 @@ export function useReviewCourse(options: {
     choosingCourse.value = false
     loadingCourses.value = false
     preparingClassroom.value = false
+    cancellingClassroom.value = false
     selectedCourseId.value = ''
     classroomResult.value = null
     classroomVideo.value = null
@@ -51,7 +55,7 @@ export function useReviewCourse(options: {
     preparingClassroom.value = true
     try {
       const task = await fetchOpenMAICClassroomStatus(requestId)
-      if (!disposed && revision === turn) classroomResult.value = task
+      if (!disposed && revision === turn) classroomResult.value = cancelledResults.get(task.request_id) || task
     } catch (error) {
       if (!disposed && revision === turn && isMissingTask(error)) forgetMissingTask(key!, requestId)
       // Restore only authorized backend results, never cached URLs.
@@ -60,7 +64,7 @@ export function useReviewCourse(options: {
   }, { immediate: true })
 
   async function askCourse() {
-    if (options.busy.value || preparingClassroom.value) return
+    if (options.busy.value || preparingClassroom.value || cancellingClassroom.value) return
     choosingCourse.value = true
     selectedCourseId.value = ''
     recentCourseIds.value = readRecentlyPlayedCourseIds(options.userId.value)
@@ -92,7 +96,7 @@ export function useReviewCourse(options: {
   }
 
   async function startForVideo(video: VideoData) {
-    if (disposed || options.busy.value || preparingClassroom.value || !video.id || video.id === '__global__') return
+    if (disposed || options.busy.value || preparingClassroom.value || cancellingClassroom.value || !video.id || video.id === '__global__') return
     preparingClassroom.value = true
     const turn = revision
     const key = options.storageKey.value
@@ -112,6 +116,11 @@ export function useReviewCourse(options: {
           status = null
         }
         if (disposed || turn !== revision) return
+        if (status && status.generation_status !== 'cancelled' && cancelledResults.has(status.request_id)) {
+          classroomResult.value = cancelledResults.get(status.request_id)!
+          return
+        }
+        if (cancellingClassroom.value) return
         classroomResult.value = status
         if (status && isReviewPending(status)) {
           let sourceId = classroomVideo.value?.id || ''
@@ -149,9 +158,43 @@ export function useReviewCourse(options: {
   }
 
   function updateStatus(status: OpenMAICClassroomStatus) {
-    if (classroomResult.value?.request_id === status.request_id) classroomResult.value = status
+    if (status.generation_status === 'cancelled') cancelledResults.set(status.request_id, status)
+    status = cancelledResults.get(status.request_id) || status
+    if (classroomResult.value?.request_id === status.request_id && classroomResult.value.generation_status !== 'cancelled') classroomResult.value = status
+  }
+
+  async function cancelReview(requestId: string): Promise<boolean> {
+    if (!requestId || !options.userId.value || disposed || cancellingClassroom.value || pendingCancellations.has(requestId)) return false
+    const turn = revision
+    const current = () => !disposed && turn === revision
+    cancellingClassroom.value = true
+    pendingCancellations.add(requestId)
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const status = await cancelOpenMAICClassroom(requestId)
+          if (!disposed) updateStatus(status)
+          return current()
+        } catch (error) {
+          const failure = error as { status?: number; code?: string }
+          if (failure.code === 'task_not_cancellable') {
+            const status = await fetchOpenMAICClassroomStatus(requestId)
+            if (!disposed) updateStatus(status)
+            return current()
+          }
+          // Retry transport failures only; HTTP errors retain the true task state.
+          if (failure.status || attempt === 2) throw error
+        }
+      }
+    } catch {
+      if (current()) MessagePlugin.error('复习材料暂停失败，请重试')
+    } finally {
+      pendingCancellations.delete(requestId)
+      if (current()) cancellingClassroom.value = false
+    }
+    return false
   }
 
   return { choosingCourse, loadingCourses, courseError, courses, recentCourseIds, selectedCourseId, preparingClassroom,
-    classroomResult, classroomVideo, classroomGenerating, askCourse, loadCourses, cancelCourse, confirmCourse, startForVideo, updateStatus }
+    classroomResult, classroomVideo, classroomGenerating, cancellingClassroom, cancelReview, askCourse, loadCourses, cancelCourse, confirmCourse, startForVideo, updateStatus }
 }

@@ -360,7 +360,7 @@ Content-Type: application/json
 - bridge 自动上传资料，校验上传结果后创建生成任务，由生成服务负责材料解析。创建请求结果不明确时失败关闭，禁止重复提交。远程任务引用先保存到受限日志卷，再回写后台。
 - bridge 每 15 秒查询生成进度并回写；重启后从日志卷和 `GET /api/custom/learning/openmaic/pending` 恢复。日志仅包含引用与安全错误码，无资料、偏好、提示词和凭据。
 - 浏览器 `GET /api/custom/learning/openmaic/:requestID/status`：只读本人任务，后台结果是页面唯一来源；5 秒刷新生成进度，成功后呈现真实 HTTPS 课堂链接。
-- generation_status：queued/submitting/running/succeeded/failed。学习 status：unknown/not_started/in_progress/completed。当前范围不做学习完成回传；成功课堂学习状态为 unknown，不返回学习同步错误。
+- generation_status：queued/submitting/running/succeeded/failed/cancelled。本人取消接口、严格请求体、最终状态竞争和迟到回写保护统一见[暂停生成规格](../../../../../output/development/specs/review-material-pause/spec.md)；远程计算未承诺停止。学习 status：unknown/not_started/in_progress/completed。当前范围不做学习完成回传；成功课堂学习状态为 unknown，不返回学习同步错误。
 - 回写只接受 running/succeeded/failed，按 request_id 定位既有任务；学员、远程任务和课堂绑定不可覆盖。未知字段、非法 JSON、截断和尾随内容拒绝；不存在任务拒绝；URL 仅接受 `https://open.maic.chat/classroom/{classroom_id}` 且禁止 pending。
 - 当前托管服务学习身份接口无授权探测返回 404；需要开放逐学员授权、整课必需场景清单和完整学习证据，才能增加完成发布。单测验 session.completed、历史 PBL completed、打开链接和口述均不足。
 

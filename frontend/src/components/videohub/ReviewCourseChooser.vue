@@ -43,7 +43,7 @@ function selectCourse(value: SelectValue) { emit('update:modelValue', typeof val
 
 <style scoped>
 .review-course-chooser { min-width: 0; padding: 20px 20px 16px; border: 1px solid rgba(255,255,255,.9); border-radius: var(--td-radius-extraLarge); background: rgba(255,255,255,.42); backdrop-filter: blur(26px) saturate(112%); -webkit-backdrop-filter: blur(26px) saturate(112%); font: var(--td-font-body-medium); }
-.review-course-chooser__title { margin: 0 0 16px; color: var(--td-text-color-primary); font: var(--td-font-title-medium); }
+.review-course-chooser__title { margin: 0 0 16px; color: var(--td-text-color-primary); font-size: 14px; font-weight: 500; line-height: 22px; }
 .review-course-chooser__choices { display: grid; gap: 8px; }
 .review-course-chooser__choice { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 12px; border: 1px solid rgba(255,255,255,.9); border-radius: var(--td-radius-large); color: var(--td-text-color-primary); background: rgba(255,255,255,.42); font: var(--td-font-body-medium); cursor: pointer; text-align: left; transition: background .2s ease; }
 .review-course-chooser__choice:hover:not(:disabled) { background: rgba(255,255,255,.58); }

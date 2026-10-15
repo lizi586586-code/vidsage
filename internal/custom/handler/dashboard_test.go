@@ -149,11 +149,27 @@ func TestDashboardRecordsRealQuestionIdempotently(t *testing.T) {
 	if len(clusters) != 1 || clusters[0].QuestionCount != 2 || clusters[0].RelatedVideoCount != 1 {
 		t.Fatalf("clusters = %#v, want one aggregated cluster", clusters)
 	}
+	if got := len(clusters[0].ID); got != 36 {
+		t.Fatalf("cluster ID length = %d, want 36 for the database contract", got)
+	}
 	var stats []model.DashboardQuestionStat
 	if err := db.Find(&stats).Error; err != nil {
 		t.Fatalf("load stats: %v", err)
 	}
 	if len(stats) != 1 || stats[0].QuestionCount != 2 || stats[0].ActiveVideoCount != 1 || stats[0].ClusterCount != 1 {
 		t.Fatalf("stats = %#v, want real aggregated counts", stats)
+	}
+}
+
+func TestStableClusterIDIsDeterministicAndFitsDatabaseContract(t *testing.T) {
+	first := stableClusterID("如何搭建知识库")
+	if first != stableClusterID("如何搭建知识库") {
+		t.Fatal("stable cluster ID changed for identical input")
+	}
+	if len(first) != 36 || !strings.HasPrefix(first, "cluster-") {
+		t.Fatalf("stable cluster ID = %q, want cluster- prefix and 36 characters", first)
+	}
+	if first == stableClusterID("如何搭建课程") {
+		t.Fatal("different normalized questions produced the same cluster ID")
 	}
 }

@@ -208,7 +208,9 @@ func normalizeQuestionKey(question string) string {
 
 func stableClusterID(questionKey string) string {
 	sum := sha256.Sum256([]byte(questionKey))
-	return "cluster-" + fmt.Sprintf("%x", sum[:16])
+	// Dashboard cluster IDs are varchar(36). The prefix plus 14 digest bytes
+	// keeps the stable ID within that contract while retaining 112 hash bits.
+	return "cluster-" + fmt.Sprintf("%x", sum[:14])
 }
 
 func upsertQuestionCluster(tx *gorm.DB, event model.DashboardQuestionEvent, questionKey string) error {

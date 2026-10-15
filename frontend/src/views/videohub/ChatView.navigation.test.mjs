@@ -6,6 +6,7 @@ import { runInNewContext } from 'node:vm'
 import { compileScript, parse } from '@vue/compiler-sfc'
 import ts from 'typescript'
 import * as vue from 'vue'
+import * as chatMessageTime from '../../utils/chatMessageTime.ts'
 
 const require = createRequire(import.meta.url)
 const source = readFileSync(new URL('./ChatView.vue', import.meta.url), 'utf8')
@@ -58,6 +59,7 @@ async function harness() {
   }
   const mocks = {
     vue,
+    '@/utils/chatMessageTime': chatMessageTime,
     'vue-router': { useRoute: () => route, useRouter: () => router },
     'tdesign-vue-next': { MessagePlugin: { error() {}, info() {} } },
     '@/api/videohub/chat': { createChatTurn, fetchSessions: async () => [], loadChatSession: async session => session },
@@ -107,11 +109,28 @@ async function harness() {
     stream(text) { options.onStreamMessage({ sender: 'assistant', text, timestamp: '刚刚' }) },
     complete() { finish({ id: 'session-1', title: '测试知识问题', scope: 'global', messages: [
       { id: 'user-1', sender: 'user', text: '测试知识问题', timestamp: '刚刚' },
-      { id: 'assistant-1', sender: 'assistant', text: '完整回答', timestamp: '刚刚' },
+      { id: 'assistant-1', sender: 'assistant', text: '完整回答', timestamp: options.assistantTimestamp },
     ] }) },
     async navigate(path, query = {}) { route.path = path; route.name = path === '/platform/ai-chat' ? 'aiChat' : 'other'; route.query = query; await flush() },
   }
 }
+
+test('reply time stays fixed through pending, repeated streaming chunks and completion', async () => {
+  const h = await harness()
+  try {
+    const { pending } = await h.start()
+    const timestamp = h.state.activeSession.messages.at(-1).timestamp
+    assert.match(timestamp, /^\d{2}月\d{2}日 \d{2}:\d{2}$/u)
+    assert.equal(h.options.assistantTimestamp, timestamp)
+    h.created(); await flush()
+    h.stream('第一段')
+    assert.equal(h.state.activeSession.messages.at(-1).timestamp, timestamp)
+    h.stream('第二段')
+    assert.equal(h.state.activeSession.messages.at(-1).timestamp, timestamp)
+    h.complete(); await pending
+    assert.equal(h.state.activeSession.messages.at(-1).timestamp, timestamp)
+  } finally { h.app.unmount() }
+})
 
 test('switching menus preserves a streaming turn and its draft; returning resumes it', async () => {
   const h = await harness()

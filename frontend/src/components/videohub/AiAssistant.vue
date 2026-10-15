@@ -13,6 +13,7 @@
         <div ref="messageArea" class="assistant-messages">
           <template v-for="(message, messageIndex) in messages" :key="message.id">
           <div v-if="!isReinforcementReply(message, messageIndex)" :class="['assistant-message', `assistant-message--${message.sender}`, { 'assistant-message--welcome': message.id.startsWith('welcome-') }]">
+            <component :is="message.sender === 'assistant' ? AssistantReplyShell : 'div'" :timestamp="message.sender === 'assistant' ? formatChatMessageTime(message.timestamp) : undefined" class="assistant-message__body">
             <AgentStreamDisplay
               v-if="shouldUseNativeAgentDisplay(message)"
               :session="toNativeAgentSession(message)"
@@ -47,16 +48,23 @@
             </template>
             <p v-else-if="message.text"><template v-for="(part, index) in splitTimestamps(message.text, message.evidenceLinks)" :key="index"><button v-if="part.seconds !== undefined" class="timestamp" type="button" @click="selectTimestamp(part)">{{ part.text }}</button><template v-else>{{ part.text }}</template></template></p>
             <small v-else-if="message.activityText" class="assistant-activity">{{ message.activityText }}</small>
+            <div v-else-if="message.id === streamingAssistantId && isGenerating" class="assistant-loading"><t-loading size="small" /> 正在整合视频知识...</div>
+            </component>
           </div>
           <div v-if="isFirstReviewRequest(messages, messageIndex)" class="assistant-review-reply">
+            <AssistantReplyShell :timestamp="reviewReplyTime(messages, messageIndex)">
             <ReviewMaterialReply :request-id="reviewRequestId(message.text)" :user-id="authStore.user?.id || ''"
               :initial-task="classroomResult" :video="classroomResult?.request_id === reviewRequestId(message.text) ? classroomVideo || (!globalMode ? currentVideo : null) : !globalMode ? currentVideo : null" @status="updateStatus" />
+            </AssistantReplyShell>
           </div>
           </template>
-          <div v-if="isGenerating && !streamingAssistantVisible && !isReinforcementInstruction(lastUserQuery)" class="assistant-loading"><t-loading size="small" /> 正在整合视频知识...</div>
-          <ReviewMaterialReply v-if="classroomResult && !messages.some(message => reviewRequestId(message.text) === classroomResult?.request_id)"
+          <div v-if="classroomResult && !messages.some(message => reviewRequestId(message.text) === classroomResult?.request_id)" class="assistant-review-reply">
+            <AssistantReplyShell>
+          <ReviewMaterialReply
             :request-id="classroomResult.request_id" :user-id="authStore.user?.id || ''" :initial-task="classroomResult"
             :video="classroomVideo || (!globalMode ? currentVideo : null)" @status="updateStatus" />
+            </AssistantReplyShell>
+          </div>
           <ReviewCourseChooser v-if="choosingCourse" v-model="selectedCourseId" :courses="courses" :recent-course-ids="recentCourseIds" :loading="loadingCourses"
             :error="courseError" :busy="preparingClassroom" @confirm="confirmCourse" @cancel="cancelCourse" @retry="loadCourses" />
         </div>
@@ -110,6 +118,8 @@ import type { StreamingChatMessage } from '@/api/videohub/chat'
 import type { ChatKnowledgeReference, ChatMessage, ChatSession, VideoData } from '@/types/videohub'
 import AgentStreamDisplay from '@/views/chat/components/AgentStreamDisplay.vue'
 import VideohubAgentPicker from '@/components/videohub/VideohubAgentPicker.vue'
+import AssistantReplyShell from './AssistantReplyShell.vue'
+import { currentChatMessageTime, formatChatMessageTime, reviewReplyTime } from '@/utils/chatMessageTime'
 import { useSettingsStore } from '@/stores/settings'
 import { sanitizeMarkdownHTML } from '@/utils/security'
 import { configureMarkedForChatMarkdown, renderChatMarkdown } from '@/utils/chatMarkdownRenderer'
@@ -156,9 +166,6 @@ const { choosingCourse, loadingCourses, courseError, courses, selectedCourseId, 
   onStart: instruction => send(instruction, true),
 })
 
-const streamingAssistantVisible = computed(() => messages.value.some(message =>
-  message.id === streamingAssistantId.value && Boolean(message.text || message.thinkingText || message.activityText),
-))
 const firstQuestion = computed(() => visibleQuestion(messages.value.find(message => message.sender === 'user')?.text || ''))
 
 // Presentation is derived from our own command, never from model output.
@@ -435,20 +442,22 @@ async function send(value: string, reinforcement = false) {
     updatedAt: Date.now(),
   })
   expanded.value = true; input.value = ''
-  messages.value.push({ id: `user-${Date.now()}`, sender: 'user', text: question, timestamp: '' })
+  const turnTimestamp = currentChatMessageTime()
+  messages.value.push({ id: `user-${Date.now()}`, sender: 'user', text: question, timestamp: turnTimestamp })
   const assistantId = `assistant-${Date.now()}`
   streamingAssistantId.value = assistantId
-  messages.value.push({ id: assistantId, sender: 'assistant', text: '', timestamp: '' })
+  messages.value.push({ id: assistantId, sender: 'assistant', text: '', timestamp: turnTimestamp })
   isGenerating.value = true; await scrollBottom()
   try {
     const updateStreamingMessage = (message: StreamingChatMessage) => {
       if (!isCurrentScope()) return
       const target = messages.value.find(item => item.id === assistantId)
       if (!target) return
-      Object.assign(target, message, { id: assistantId })
+      Object.assign(target, message, { id: assistantId, timestamp: turnTimestamp })
       void scrollBottom()
     }
     const session = await createChatTurn(question, {
+      assistantTimestamp: turnTimestamp,
       currentVideo: props.currentVideo,
       currentTime: props.currentTime,
       globalMode: props.globalMode,
@@ -471,7 +480,8 @@ async function send(value: string, reinforcement = false) {
   catch (error) {
     if (!isCurrentScope()) return
     const text = error instanceof Error ? error.message : '问答生成失败，请稍后重试'
-    messages.value.push({ id: `error-${Date.now()}`, sender: 'assistant', text, timestamp: '' })
+    messages.value = messages.value.filter(message => message.id !== assistantId || Boolean(message.text || message.thinkingText))
+    messages.value.push({ id: `error-${Date.now()}`, sender: 'assistant', text, timestamp: currentChatMessageTime() })
     MessagePlugin.error(text)
   } finally { if (isCurrentScope()) { isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null; await scrollBottom() } }
 }
@@ -575,6 +585,8 @@ watch(() => props.externalQuery, value => { if (value && value !== consumedExter
   display: flex;
   margin-bottom: 20px;
 }
+
+.assistant-message__body { width: 100%; min-width: 0; }
 
 .assistant-message--welcome {
   margin-bottom: 8px;

@@ -27,6 +27,7 @@ import {
   type StoredChatMessage,
 } from './chatRequestDebug'
 import { recordChatSourceAudit, recordDashboardQuestion } from './dashboard'
+import { currentChatMessageTime, formatChatMessageTime } from '@/utils/chatMessageTime'
 
 interface ScopeResponse extends ChatRequestScope {
   video_id?: string
@@ -82,6 +83,7 @@ interface ApiEnvelope<T> {
 }
 
 interface SendOptions {
+  assistantTimestamp?: string
   currentVideo?: VideoData
   currentTime?: number
   globalMode?: boolean
@@ -101,6 +103,7 @@ interface TurnOptions extends SendOptions {
 }
 
 interface StreamAnswerOptions {
+  assistantTimestamp?: string
   onChunk?: (message: StreamingChatMessage) => void
   onStopReady?: (stop: ChatTurnStop) => void
 }
@@ -394,7 +397,7 @@ function mapMessage(
     id: message.id || messageId(),
     sender: message.role === 'user' ? 'user' : 'assistant',
     text: message.role === 'user' ? displayQuestionFromStoredContent(rawContent) : cleanAnswer(rawContent),
-    timestamp: formatRelativeTime(message.created_at || message.updated_at),
+    timestamp: formatChatMessageTime(message.created_at),
     relatedVideoId: firstEvidence?.videoId,
     relatedVideoTitle: firstEvidence?.videoTitle,
     relatedTime: firstEvidence?.seconds,
@@ -817,6 +820,7 @@ function findLastAssistantAnswerIndex(messages: ChatMessage[]) {
 }
 
 async function streamAnswer(sessionID: string, question: string, scope: ScopeResponse, options: StreamAnswerOptions = {}): Promise<StreamingAnswerResult> {
+  const assistantTimestamp = formatChatMessageTime(options.assistantTimestamp) || currentChatMessageTime()
   const token = localStorage.getItem('weknora_token')
   if (!token) throw new Error('登录已失效，请重新登录后再提问')
   const apiBase = getApiBaseUrl()
@@ -868,7 +872,7 @@ async function streamAnswer(sessionID: string, question: string, scope: ScopeRes
     video_evidence: videoEvidence,
     thinkingText: thinkingText.trim(),
     activityText,
-    timestamp: nowLabel(),
+    timestamp: assistantTimestamp,
   })
   options.onStopReady?.(async () => {
     if (stopRequested) return
@@ -1006,7 +1010,7 @@ async function streamAnswer(sessionID: string, question: string, scope: ScopeRes
     video_evidence: videoEvidence,
     thinkingText: thinkingText.trim(),
     activityText: '',
-    timestamp: nowLabel(),
+    timestamp: assistantTimestamp,
   }
   return { answer: cleanAnswer(answer), streamMessage }
 }
@@ -1027,7 +1031,7 @@ async function hydrateLastAssistant(
   const messages = await loadSessionMessages(session.id, tenantID)
   const mapped = await mapMessages(session.id, messages)
   const assistant = [...mapped].reverse().find(message => message.sender === 'assistant' && message.text.trim())
-  return assistant || { id: messageId(), sender: 'assistant', text: fallbackText, timestamp: nowLabel() }
+  return assistant || { id: messageId(), sender: 'assistant', text: fallbackText, timestamp: '' }
 }
 
 function sessionFromScope(session: WeKnoraSession, scope: ScopeResponse, messages: ChatMessage[], fallbackTitle: string): ChatSession {
@@ -1104,13 +1108,15 @@ export async function sendChatMessage(question: string, options: SendOptions = {
     const session = await createSession(question, scope)
     const eventID = recordQuestionBestEffort(question, scope, session.id, options.currentVideo, options.currentTime)
     const { answer, streamMessage } = await streamAnswer(session.id, question, scope, {
+      assistantTimestamp: options.assistantTimestamp,
       onChunk: options.onStreamMessage,
       onStopReady: options.onStopReady,
     })
     const storedMessages = await loadSessionMessages(session.id, scope.tenant_id)
     const mappedMessages = await mapMessages(session.id, storedMessages)
     const assistant = [...mappedMessages].reverse().find(message => message.sender === 'assistant' && message.text.trim())
-      || { id: messageId(), sender: 'assistant' as const, text: answer, timestamp: nowLabel() }
+      || { ...streamMessage, id: messageId(), text: answer }
+    assistant.timestamp = streamMessage.timestamp
     void recordSourceAuditBestEffort(eventID, session.id, scope, storedMessages, streamMessage).catch(error => {
       console.warn('record chat source audit failed', error)
     })
@@ -1152,6 +1158,7 @@ export async function createChatTurn(question: string, options: TurnOptions = {}
     const userMessage: ChatMessage = { id: messageId(), sender: 'user', text: question, timestamp: nowLabel() }
     options.onMessage?.(userMessage)
     const { answer, streamMessage } = await streamAnswer(session.id, question, effectiveScope, {
+      assistantTimestamp: options.assistantTimestamp,
       onChunk: options.onStreamMessage,
       onStopReady: options.onStopReady,
     })
@@ -1160,7 +1167,9 @@ export async function createChatTurn(question: string, options: TurnOptions = {}
     void recordSourceAuditBestEffort(eventID, session.id, effectiveScope, storedMessages, streamMessage).catch(error => {
       console.warn('record chat source audit failed', error)
     })
-    const finalMessages = mergeLocalTurnWithStoredMessages(messages, userMessage, { ...streamMessage, id: messageId(), text: answer, timestamp: nowLabel() })
+    const finalMessages = mergeLocalTurnWithStoredMessages(messages, userMessage, { ...streamMessage, id: messageId(), text: answer })
+    const finalAssistant = [...finalMessages].reverse().find(message => message.sender === 'assistant')
+    if (finalAssistant) finalAssistant.timestamp = streamMessage.timestamp
     return sessionFromScope(session, effectiveScope, finalMessages, question)
   } catch (error) {
     throw normalizeChatError(error)

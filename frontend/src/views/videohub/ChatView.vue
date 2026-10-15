@@ -49,8 +49,9 @@
         <template v-for="(message, messageIndex) in activeSession.messages" :key="message.id">
         <article v-if="!isReviewReply(message, messageIndex)" :class="['message', `message--${message.sender}`]">
           <div class="message__bubble">
+            <component :is="message.sender === 'assistant' ? AssistantReplyShell : 'div'" :timestamp="message.sender === 'assistant' ? formatChatMessageTime(message.timestamp) : undefined">
             <AgentStreamDisplay
-              v-if="message.sender === 'assistant'"
+              v-if="message.sender === 'assistant' && (message.id !== streamingAssistantId || streamingAssistantVisible)"
               :session="toNativeAgentSession(message)"
               :session-id="activeSession.id"
               :user-query="questionForMessage(messageIndex) || lastUserQuery"
@@ -59,6 +60,7 @@
               :hydrate-protected-images="false"
               @video-navigate="navigateToEvidence"
             />
+            <div v-else-if="message.sender === 'assistant'" class="generating"><t-loading size="small" /> AI 正在整合视频知识回答中...</div>
             <template v-else>
   <form v-if="editingMessageId === message.id" class="message-edit" @submit.prevent="resendEditedMessage">
     <textarea v-model="editingMessageText" rows="3" aria-label="编辑已发送指令" @keydown.esc.prevent="cancelMessageEdit" />
@@ -89,14 +91,16 @@
     </button>
   </div>
 </template>
+            </component>
           </div>
         </article>
         <article v-if="isFirstReviewRequest(activeSession.messages, messageIndex)" class="message message--assistant">
+          <AssistantReplyShell :timestamp="reviewReplyTime(activeSession.messages, messageIndex)">
           <ReviewMaterialReply :request-id="reviewRequestId(message.text)" :user-id="authStore.user?.id || ''"
             :initial-task="classroomResult" :video="classroomResult?.request_id === reviewRequestId(message.text) ? classroomVideo : null" @status="updateStatus" />
+          </AssistantReplyShell>
         </article>
         </template>
-        <div v-if="isGenerating && !streamingAssistantVisible && !reviewRequestId(lastUserQuery)" class="generating"><t-loading size="small" /> AI 正在整合视频知识回答中...</div>
         <ReviewCourseChooser v-if="choosingCourse" v-model="selectedCourseId" :courses="courses" :recent-course-ids="recentCourseIds" :loading="loadingCourses"
           :error="courseError" :busy="preparingClassroom" @confirm="confirmCourse" @cancel="cancelCourse" @retry="loadCourses" />
       </div>
@@ -141,6 +145,8 @@ import type { StreamingChatMessage } from '@/api/videohub/chat'
 import type { ChatMessage, ChatSession } from '@/types/videohub'
 import AgentStreamDisplay from '@/views/chat/components/AgentStreamDisplay.vue'
 import VideohubAgentPicker from '@/components/videohub/VideohubAgentPicker.vue'
+import AssistantReplyShell from '@/components/videohub/AssistantReplyShell.vue'
+import { currentChatMessageTime, formatChatMessageTime, reviewReplyTime } from '@/utils/chatMessageTime'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
 import { useReviewCourse } from '@/composables/useReviewCourse'
@@ -279,13 +285,13 @@ function updateStreamingMessage(messageId: string, message: StreamingChatMessage
   if (!activeSession.value) return
   const target = activeSession.value.messages.find(item => item.id === messageId) as RenderableChatMessage | undefined
   if (!target) return
-  Object.assign(target, message, { id: messageId })
+  Object.assign(target, message, { id: messageId, timestamp: target.timestamp })
   void scrollBottom()
 }
 function pushStreamingPlaceholder(target: ChatSession) {
   const assistantId = `assistant-${Date.now()}`
   streamingAssistantId.value = assistantId
-  target.messages.push({ id: assistantId, sender: 'assistant', text: '', timestamp: '刚刚' } as StreamingChatMessage)
+  target.messages.push({ id: assistantId, sender: 'assistant', text: '', timestamp: currentChatMessageTime() } as StreamingChatMessage)
   return assistantId
 }
 
@@ -370,6 +376,7 @@ async function startSession() {
   sessions.value.unshift(session); activeSession.value = session; isGenerating.value = true; await scrollBottom()
   try {
     const created = await createChatTurn(value, {
+      assistantTimestamp: session.messages.find(message => message.id === assistantId)?.timestamp,
       globalMode: true,
       agentId: reinforcement ? undefined : settingsStore.selectedAgentId,
       agentEnabled: reinforcement || settingsStore.isAgentEnabled,
@@ -390,7 +397,8 @@ async function startSession() {
     }
   } catch (error) {
     if (revision !== turnRevision) return
-    session.messages.push({ id: `error-${Date.now()}`, sender: 'assistant', text: error instanceof Error ? error.message : '问答生成失败，请稍后重试', timestamp: '刚刚' })
+    session.messages = session.messages.filter(message => message.id !== assistantId || Boolean(message.text))
+    session.messages.push({ id: `error-${Date.now()}`, sender: 'assistant', text: error instanceof Error ? error.message : '问答生成失败，请稍后重试', timestamp: currentChatMessageTime() })
   } finally { if (revision === turnRevision) { isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null; await scrollBottom() } }
 }
 async function continueSession() {
@@ -408,6 +416,7 @@ async function continueSession() {
   isGenerating.value = true; await scrollBottom()
   try {
     const updated = await createChatTurn(value, {
+      assistantTimestamp: target.messages.find(message => message.id === assistantId)?.timestamp,
       globalMode: reinforcement || target.scope !== 'video',
       agentId: reinforcement ? undefined : settingsStore.selectedAgentId,
       agentEnabled: reinforcement || settingsStore.isAgentEnabled,
@@ -433,7 +442,8 @@ async function continueSession() {
     clearChatRecovery(recoveryStorage, CHAT_PAGE_RECOVERY_KEY)
   } catch (error) {
     if (revision !== turnRevision) return
-    target.messages.push({ id: `error-${Date.now()}`, sender: 'assistant', text: error instanceof Error ? error.message : '问答生成失败，请稍后重试', timestamp: '刚刚' })
+    target.messages = target.messages.filter(message => message.id !== assistantId || Boolean(message.text))
+    target.messages.push({ id: `error-${Date.now()}`, sender: 'assistant', text: error instanceof Error ? error.message : '问答生成失败，请稍后重试', timestamp: currentChatMessageTime() })
   } finally { if (revision === turnRevision) { isGenerating.value = false; streamingAssistantId.value = ''; stopCurrentTurn.value = null; await scrollBottom() } }
 }
 async function openSession(session: ChatSession) {
@@ -941,7 +951,7 @@ onMounted(async () => {
 .message-edit__actions :deep(.t-button:hover),
 .message-edit__actions :deep(.t-button:focus-visible) { background: transparent; color: var(--td-brand-color); }
 .message-edit__actions :deep(.t-button--theme-primary) { color: var(--td-brand-color); }
-.message--assistant { display: block; }
+.message--assistant { display: block; margin-bottom: 20px; }
 .message__bubble { min-width: 0; max-width: 72%; overflow-wrap: anywhere; }
 .message--assistant .message__bubble { width: 100%; max-width: none; }
 .message__bubble > p { margin: 0; padding: 11px 14px; border-radius: var(--td-radius-large); background: rgba(255,255,255,.54); line-height: 1.7; white-space: pre-wrap; }

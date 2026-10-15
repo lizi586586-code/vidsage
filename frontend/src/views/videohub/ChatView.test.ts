@@ -35,9 +35,11 @@ test('chat page avoids a full-page backdrop filter that can blank during hover r
   assert.doesNotMatch(componentSource, /\.chat-page::after\s*\{[^}]*-webkit-backdrop-filter/s)
 })
 
-test('chat page renders assistant answers without a separate identity column', () => {
+test('chat page uses the shared identity layout for ordinary and structured replies', () => {
   assert.match(componentSource, /\.message--assistant\s*\{[^}]*display:\s*block/s)
   assert.match(componentSource, /\.message--assistant \.message__bubble\s*\{[^}]*width:\s*100%/s)
+  assert.match(componentSource, /message.sender === 'assistant' \? AssistantReplyShell : 'div'/)
+  assert.match(componentSource, /<AssistantReplyShell :timestamp="reviewReplyTime\(activeSession.messages, messageIndex\)"/)
 })
 
 test('chat page wraps overflowing conversation content within the safe width', () => {
